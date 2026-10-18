@@ -49,7 +49,7 @@ try:
     ok('phase 1 chip on home', 'Phase 1' in pg.inner_text('#homeAlerts'))
     # wait for SW precache
     pg.evaluate("navigator.serviceWorker.ready"); pg.wait_for_function("caches.keys().then(k=>k.length>0)")
-    pg.wait_for_function("caches.open('foodlog-v19').then(c=>c.match('vendor/tessdata/eng.traineddata.gz')).then(r=>!!r)", timeout=60000)
+    pg.wait_for_function("caches.open('foodlog-v20').then(c=>c.match('vendor/tessdata/eng.traineddata.gz')).then(r=>!!r)", timeout=60000)
     ok('service worker precached OCR data', True)
     # --- real Open Food Facts lookups ---
     pg.click('#bigAdd'); pg.wait_for_selector('#s-add:not([hidden])')
@@ -86,12 +86,31 @@ try:
     pg.evaluate("(async()=>{__fl.S.settings.targetMin=2400;__fl.S.weights=[{ts:Date.now()-60*86400e3,kg:72.6},{ts:Date.now()-30*86400e3,kg:72.3},{ts:Date.now()-2*86400e3,kg:72.1}];await __fl.save('settings','weights');__fl.show('today')})()")
     pg.click('#actSeg [data-a=desk]'); pg.wait_for_timeout(300)
     pg.evaluate("(()=>{const e=__fl.S.entries; const l=e.reduce((a,b)=>a.ts>b.ts?a:b); l.ts=Date.now()-75*60000; return __fl.save('entries')})()"); pg.reload(); pg.wait_for_selector('#s-today:not([hidden])'); pg.wait_for_timeout(800)
-    print('NEXT', pg.inner_text('#nextMeal'))
-    ok('desk countdown driven by research hours', '3–4 h after your last meal · research' in pg.inner_text('#nextMeal'))
-    shot(pg, '05a-home-desk-countdown')
+    ok('no live timer / countdown on home', pg.locator('#timer').count() == 0 and pg.locator('#nextMeal').count() == 0)
+    t1 = pg.inner_text('#lastMeal'); pg.wait_for_timeout(1500); ok('last-meal card is static (no ticking)', pg.inner_text('#lastMeal') == t1)
+    ok('compact card shows plan line', 'so far' in pg.inner_text('#planLine'))
+    ok('sources behind a tap', pg.is_hidden('#srcBox')); pg.click('#srcToggle'); ok('sources shown on tap', pg.is_visible('#srcBox') and len(pg.inner_text('#srcBox')) > 3); pg.click('#srcToggle')
+    # TEST gaps: deterministic entries
+    g = pg.evaluate("""(async()=>{const S=__fl.S; const keep=S.entries; const d=new Date(); d.setHours(12,51,0,0); const t=d.getTime(); const mk=(n,ts)=>({id:'gT'+ts+n,ts,name:'TEST '+n,basis:'serving',qty:1,per:{}});
+      const es=[mk('dinner',t-86400e3+7*3600e3-24*3600e3*0-12*3600e3*0), mk('breakfast',t-4*3600e3-10*60e3), mk('juice',t-4*3600e3), mk('Oatmeal',t)];
+      es[0].ts=t-4*3600e3-10*60e3-15*3600e3; S.entries=es; S.entries.forEach(e=>{delete e.gapMinutes}); const ch=__fl.computeGaps();
+      const r={ch, over:es[1].gapOvernight===true&&es[1].gapMinutes==null, same:es[2].gapMinutes===es[1].gapMinutes, oat:es[3].gapMinutes, first:es[0].gapMinutes, txt:__fl.gapText(es[3]), otxt:__fl.gapText(es[1])};
+      S.entries=keep; __fl.computeGaps(); return r})()""")
+    print('GAPS', g)
+    ok('backfill sets gaps on old entries', g['ch'] is True)
+    ok('>14 h gap labelled overnight, not counted', g['over'] and g['otxt'] == 'first meal after overnight')
+    ok('same meal (≤45 min) shares gap', g['same'])
+    ok('gap measured from end of previous meal', g['oat'] == 240 and g['txt'] == '4 h since last meal')
+    ok('very first entry has no gap', g['first'] is None)
+    pg.evaluate("(()=>{const e=__fl.S.entries; const l=e.reduce((a,b)=>a.ts>b.ts?a:b); l.ts=Date.now()-75*60000; return __fl.save('entries')})()")
+    pg.evaluate("(async()=>{const S=__fl.S; S.entries.push({id:'gTnew',ts:Date.now()-60000,name:'TEST snack',basis:'serving',qty:1,per:{kcal:100}}); await __fl.save('entries'); __fl.show('today')})()"); pg.wait_for_timeout(400)
+    ok('new entry gets gapMinutes on save', pg.evaluate("__fl.S.entries.find(e=>e.id==='gTnew').gapMinutes") == 74)
+    ok('day log shows gap', '1 h 14 m since last meal' in pg.inner_text('#entries'))
+    ok('home card shows gap after previous meal', 'TEST snack' in pg.inner_text('#lastMeal') and '1 h 14 m after previous meal' in pg.inner_text('#lastMeal'))
+    pg.set_viewport_size({'width': 375, 'height': 812}); pg.evaluate("scrollTo(0,0)"); w375 = pg.evaluate('document.documentElement.scrollWidth'); shot(pg, '34-compact-last-meal'); pg.set_viewport_size({'width': 390, 'height': 844})
+    ok('home fits 375px width', w375 <= 375)
+    pg.evaluate("(async()=>{__fl.S.entries=__fl.S.entries.filter(e=>e.id!=='gTnew'); await __fl.save('entries')})()")
     pg.click('#actSeg [data-a=field]'); pg.wait_for_timeout(300)
-    print('NEXTF', pg.inner_text('#nextMeal')); ok('field-day fueling countdown', 'fuel every 1 h' in pg.inner_text('#nextMeal') and '1–4 h before' in pg.inner_text('#nextMeal'))
-    ok('timer running', ':' in pg.inner_text('#timer'))
     shot(pg, '05-home-timer-counter'); pg.evaluate("document.querySelector('#bigAdd').scrollIntoView({block:'center'})"); shot(pg, '05b-home-add-entries')
     # label photo OCR (synthetic TEST label, not saved)
     pg.click('#bigAdd'); pg.click('.seg-btn[data-mode=label]')

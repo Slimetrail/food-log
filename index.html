@@ -80,15 +80,17 @@
   <div id="pantryNudgeBox"></div>
   <div id="tonightCard" hidden></div>
   <div class="card" id="toCookCard" hidden></div>
-  <div class="card timer-card">
-    <div class="label">Since last meal</div>
-    <div class="timer" id="timer">—</div>
-    <div class="sub" id="lastMeal">Nothing logged yet</div>
-    <div class="next" id="nextMeal"></div>
-    <div class="act-seg" id="actSeg" aria-label="Today's activity">
-      <button class="chip" data-a="desk">🪑 Desk day</button>
-      <button class="chip" data-a="field">🥾 Field day</button>
+  <div class="card last-card" id="lastCard">
+    <div class="lm" id="lastMeal">Nothing logged yet</div>
+    <div class="sub" id="planLine"></div>
+    <div class="last-row">
+      <div class="act-seg" id="actSeg" aria-label="Today's activity">
+        <button class="chip" data-a="desk">🪑 Desk day</button>
+        <button class="chip" data-a="field">🥾 Field day</button>
+      </div>
+      <button class="chip src-toggle" id="srcToggle" hidden aria-label="Show sources">ⓘ</button>
     </div>
+    <div class="src light" id="srcBox" hidden></div>
   </div>
   <div class="card counter-card">
     <div class="day-nav">
@@ -205,6 +207,7 @@
 
 <!-- PROGRESS -->
 <section class="screen" id="s-progress" hidden>
+  <div id="gapAvg"></div>
   <div id="phaseCard"></div>
   <div id="stepsBody"></div>
   <div id="focusGoal"></div>

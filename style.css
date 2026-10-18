@@ -292,3 +292,7 @@ details.cite[open]{display:block;width:100%;background:#f6f8f4;border-radius:8px
 #hhInvite,#hhSendBack,#hhLinkMsg{box-sizing:border-box}#hhInvite input{box-sizing:border-box;width:100%}#hhLinkText{width:100%;font-size:14px}
 .hh-rows{grid-template-columns:minmax(0,1fr)}.hh-row,.hh-days{min-width:0;max-width:100%}.hh-who .sub{overflow-wrap:anywhere}
 .row3{grid-template-columns:repeat(3,minmax(0,1fr))}.row3 input,.row3 label{min-width:0;max-width:100%;box-sizing:border-box}fieldset{min-width:0}
+
+.last-card{padding:12px 14px}.last-card .lm{font-size:16px;line-height:1.35}.last-card .last-row{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:8px}.last-card .act-seg{display:flex;gap:6px}.last-card .chip{min-height:44px;font-size:14px;padding:6px 12px}.last-card .chip.active{background:var(--g);color:#fff;font-weight:700}.last-card .src-toggle{margin-left:auto}.last-card .src{margin-top:6px;font-size:13px}.entry .gap{color:var(--g);font-weight:600}
+.last-card .chip{color:var(--g);border:1px solid var(--g);background:#fff}.last-card .chip.active{background:var(--g);color:#fff}.last-card [hidden]{display:none!important}
+.last-card .src-toggle{padding:6px 14px}

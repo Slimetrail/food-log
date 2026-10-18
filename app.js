@@ -34,7 +34,16 @@ const DB = {
 const S = { leftovers: [], household: null, voiceQueue: [], pantry: [], toCook: [], planAnchor: null, stepChecks: {}, mySteps: [], phaseLog: [], medas: [], focus: [], skips: [], tipDismissed: {}, water: {}, favorites: [], offCache: {}, pendingScans: [], goals: null, weights: [], quizHistory: [], entries: [], grocery: [], myMeals: [], plan: null, queue: [], profile: null, dailyActivity: {}, quiz: null, settings: { waterTarget: null, waterField: null, target: null, targetMin: null, planMode: 'weekly', units: 'us', intervalH: null, notify: false, mealTimes: null } };
 const KEYS = Object.keys(S);
 async function loadState() { for (const k of KEYS) { const v = await DB.get(k); if (v !== undefined) S[k] = (k === 'settings') ? { ...S.settings, ...v } : v; } }
-const save = (...ks) => Promise.all(ks.map(k => DB.set(k, S[k])));
+const save = (...ks) => { if (ks.includes('entries')) computeGaps(); return Promise.all(ks.map(k => DB.set(k, S[k]))); };
+/* gap between meals: entries within 45 min are one meal (same rule as occasions); >14 h = overnight */
+const MEAL_CLUSTER_MS = 45 * 60000, OVERNIGHT_MS = 14 * 3600000;
+function computeGaps() { let changed = false; const es = (S.entries || []).slice().sort((a, b) => a.ts - b.ts); let prevEnd = null, curEnd = null, curGap, curOver;
+  for (const e of es) { if (curEnd != null && e.ts - curEnd <= MEAL_CLUSTER_MS) { curEnd = e.ts; } else { prevEnd = curEnd; curEnd = e.ts;
+      if (prevEnd == null) { curGap = null; curOver = false; } else { const g = e.ts - prevEnd; curOver = g > OVERNIGHT_MS; curGap = curOver ? null : Math.round(g / 60000); } }
+    const ov = curOver || undefined; if (e.gapMinutes !== curGap || e.gapOvernight !== ov) { changed = true; e.gapMinutes = curGap; if (ov) e.gapOvernight = true; else delete e.gapOvernight; } }
+  return changed; }
+const fmtGap = m => { const h = Math.floor(m / 60), mm = m % 60; return h ? h + ' h' + (mm ? ' ' + mm + ' m' : '') : mm + ' m'; };
+const gapText = e => e.gapOvernight ? 'first meal after overnight' : e.gapMinutes != null ? fmtGap(e.gapMinutes) + ' since last meal' : '';
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 
 /* ---------- research data (data/*.json, refreshed when online) ---------- */
@@ -505,34 +514,32 @@ function timingRule() {
   return rules.find(r => r.activity === want) || rules.find(r => r.activity === 'any') || null;
 }
 let notifiedFor = null;
+/* compact last-meal card: static, no live timer. Reminder check (notification) still uses research timing, without showing a countdown. */
 function tick() {
-  const l = lastMeal();
-  if (!l) { $('#timer').textContent = '—'; $('#lastMeal').textContent = 'Nothing logged yet'; $('#nextMeal').innerHTML = ''; return; }
-  const since = Date.now() - l.ts;
-  $('#timer').textContent = hms(since);
-  $('#lastMeal').textContent = 'Last: ' + l.name + ' · ' + (dayKey(l.ts) === dayKey(new Date()) ? '' : fmtDay(l.ts) + ' ') + fmtTime(l.ts);
-  const rule = timingRule();
-  let minH = null, maxH = null, src = '', planHtml = '', srcHtml = rule ? `<div class="src light">${evBadge(rule)} ${srcLinks(rule.sources)}</div>` : '';
-  if (rule && rule.mealsPerDay) { const occ = occasions(entriesOn(new Date())), plan = rule.mealsPerDay + (rule.snacksPerDay || 0);
-    planHtml = `Today's plan: <b>${rule.mealsPerDay} meals${rule.snacksPerDay ? ' + ' + rule.snacksPerDay + ' snack' : ''}</b> · ${Math.min(occ, plan)} of ${plan} so far`; }
-  const cd = rule && rule.countdown, fu = rule && rule.fueling;
-  if (cd && cd.dueAfterHours != null) { minH = cd.dueAfterHours; maxH = cd.latestHours; src = 'research'; }
-  else if (rule && rule.minHoursBetween != null) { minH = rule.minHoursBetween; maxH = rule.maxHoursBetween; src = 'research'; }
-  if (fu && rule.activity === 'field') { const ph = rule.preHikeMealHoursBefore || fu.preHikeMealHoursBefore, rh = (R.targets && R.targets.recovery && R.targets.recovery.withinHours) || rule.recoveryWithinHours;
-    planHtml = `🥾 Field day: eat a meal ${ph ? ph.min + '–' + ph.max + ' h before you head out' : 'before heading out'}; on hikes over ${fu.appliesWhenActivityLongerThanHours} h, fuel every ${fu.intervalHours} h${rh ? `; recovery meal within ${rh} h after` : ''}.`; }
-  if (minH == null && S.settings.intervalH) { minH = S.settings.intervalH; src = 'your reminder interval (research has no value for today)'; }
-  if (minH == null) { $('#nextMeal').innerHTML = (planHtml || 'Meal timing: <i>coming from research</i>') + '<div class="sub">Set a reminder interval in ⚙️ for a countdown</div>' + srcHtml; return; }
-  const due = l.ts + minH * 3600000, left = due - Date.now(); const wasDue = mealDueNow; mealDueNow = left <= 0; if (wasDue !== mealDueNow) renderToCook();
-  let html = left > 0 ? `${fu && rule.activity === 'field' && src === 'research' ? 'Next snack on the trail in' : 'Next meal or snack in'} <b>${hms(left)}</b>` : `<b>Time to refuel 🍎</b> — even a small snack counts`;
-  html += fu && rule.activity === 'field' && src === 'research' ? `<div class="sub">Hike fuel every ${minH} h (hikes over ${fu.appliesWhenActivityLongerThanHours} h)</div>` : maxH ? `<div class="sub">Usually ${minH}–${maxH} h after your last meal · ${esc(src)}</div>` : `<div class="sub">Every ${minH} h · ${esc(src)}</div>`;
-  $('#nextMeal').innerHTML = (planHtml ? planHtml + '<div style="height:6px"></div>' : '') + html + srcHtml;
+  const l = lastMeal(), rule = timingRule();
+  let planHtml = '';
+  if (rule && rule.mealsPerDay) { const occ = occasions(entriesOn(new Date())), plan = rule.mealsPerDay + (rule.snacksPerDay || 0); planHtml = `Today's plan: ${Math.min(occ, plan)} of ${plan} so far`; }
+  $('#planLine').textContent = planHtml;
+  $('#srcBox').innerHTML = rule ? `${evBadge(rule)} ${srcLinks(rule.sources)}` : '';
+  $('#srcToggle').hidden = !rule;
+  if (!l) { $('#lastMeal').textContent = 'Nothing logged yet'; return; }
+  const gt = gapText(l);
+  $('#lastMeal').innerHTML = `Last: <b>${esc(l.name)}</b> · ${dayKey(l.ts) === dayKey(new Date()) ? '' : fmtDay(l.ts) + ' '}${fmtTime(l.ts)}${gt ? ' · ' + esc(gt.replace('since last meal', 'after previous meal')) : ''}`;
+  checkReminder(l, rule);
+}
+function checkReminder(l, rule) {
+  l = l || lastMeal(); if (!l) return; rule = rule || timingRule();
+  const cd = rule && rule.countdown; let minH = cd && cd.dueAfterHours != null ? cd.dueAfterHours : rule && rule.minHoursBetween != null ? rule.minHoursBetween : S.settings.intervalH || null;
+  if (minH == null) return;
+  const left = l.ts + minH * 3600000 - Date.now(); const wasDue = mealDueNow; mealDueNow = left <= 0; if (wasDue !== mealDueNow) renderToCook();
   if (left <= 0 && S.settings.notify && notifiedFor !== l.id && 'Notification' in window && Notification.permission === 'granted') {
     notifiedFor = l.id;
     navigator.serviceWorker?.ready.then(r => r.showNotification('Food Log', { body: 'Time to refuel 🍎 ' + (tonightItem() ? 'Tonight: you bought ingredients for ' + tonightItem().name + '.' : 'A small snack or meal would be great right now.'), icon: 'icons/icon-192.png', tag: 'meal-due' })).catch(() => new Notification('Food Log', { body: 'Time to refuel 🍎 A small snack or meal would be great right now.' }));
   }
 }
-setInterval(() => { if (curTab === 'today') tick(); }, 1000);
+setInterval(() => checkReminder(), 60000); /* background reminder check only; nothing on screen ticks */
 function renderActivity() { const a = S.dailyActivity[dayKey(viewDay)] || ''; $$('#actSeg .chip').forEach(b => b.classList.toggle('active', b.dataset.a === a)); }
+$('#srcToggle') && ($('#srcToggle').onclick = () => { const b = $('#srcBox'); b.hidden = !b.hidden; });
 $$('#actSeg .chip').forEach(b => b.onclick = async () => { const k = dayKey(viewDay); if (S.dailyActivity[k] === b.dataset.a) delete S.dailyActivity[k]; else S.dailyActivity[k] = b.dataset.a; await save('dailyActivity'); renderToday(); });
 function novaShare() {
   const from = startOfDay(addDays(new Date(), -6)).getTime();
@@ -613,7 +620,7 @@ function renderToday() {
     const kc = entryKcal(e), r = ratingFor(e.foodId, e.group);
     const amt = e.basis === '100g' ? (e.qty + ' g') : (e.qty + ' serving' + (e.qty == 1 ? '' : 's') + (e.servingSize ? ' (' + e.servingSize + ')' : ''));
     return `<li class="entry-wrap" data-id="${e.id}"><div class="entry">${e.thumb ? `<img src="${e.thumb}" alt="">` : `<div class="ph">${e.source === 'off' ? '📦' : e.source === 'label' ? '🏷️' : '🍽️'}</div>`}
-      <div class="info"><div class="nm">${esc(e.name)}${e.nova == 4 ? '<span class="upf">UPF</span>' : ''}</div>${e.pendingLookup ? '<div class="sub">⏳ Will look up when online</div>' : e.needsReview ? '<div class="sub">✏️ Please check the amount</div>' : ''}<div class="sub">${fmtTime(e.ts)} · ${esc(amt)}${e.group ? ' · ' + esc(GROUPS[e.group] || e.group) : ''}${r ? ` <span class="tag rate-${r}">${RATING[r]}</span>` : ''}</div></div>
+      <div class="info"><div class="nm">${esc(e.name)}${e.nova == 4 ? '<span class="upf">UPF</span>' : ''}</div>${e.pendingLookup ? '<div class="sub">⏳ Will look up when online</div>' : e.needsReview ? '<div class="sub">✏️ Please check the amount</div>' : ''}<div class="sub">${fmtTime(e.ts)}${gapText(e) ? ` · <span class="gap">${esc(gapText(e))}</span>` : ''} · ${esc(amt)}${e.group ? ' · ' + esc(GROUPS[e.group] || e.group) : ''}${r ? ` <span class="tag rate-${r}">${RATING[r]}</span>` : ''}</div></div>
       <div class="kc">${kc == null ? '? kcal' : Math.round(kc) + ' kcal'}</div>
       <div class="actions"><button class="icon-btn" data-act="swap" aria-label="Better swaps">🔁</button><button class="icon-btn" data-act="edit" aria-label="Edit">✏️</button><button class="icon-btn" data-act="del" aria-label="Delete">🗑️</button></div></div><div class="sw-slot"></div></li>`;
   }).join('');
@@ -1556,11 +1563,11 @@ $('#installBtn').onclick = async () => { if (deferredPrompt) { deferredPrompt.pr
 
 /* ---------- init ---------- */
 (async () => {
-  await DB.open(); await loadState(); try { archiveLeftovers(); } catch (e) {} if (S.settings.planStyle == null) { S.settings.planStyle = S.plan && (S.plan.days || []).some(d => Object.keys(d.meals || {}).length) ? 'pending' : 'choose'; save('settings'); } await loadResearch();
+  await DB.open(); await loadState(); try { if (computeGaps()) DB.set('entries', S.entries); } catch (e) {} try { archiveLeftovers(); } catch (e) {} if (S.settings.planStyle == null) { S.settings.planStyle = S.plan && (S.plan.days || []).some(d => Object.keys(d.meals || {}).length) ? 'pending' : 'choose'; save('settings'); } await loadResearch();
   if (!S.profile) { fillProfile(); show('profile'); } else show('today');
   resolvePending(); handleLinkHash();
   document.addEventListener('visibilitychange', async () => { if (document.visibilityState === 'visible' && navigator.onLine) { await loadResearch(); if (curTab !== 'add' && curTab !== 'profile' && curTab !== 'quiz') show(curTab); } });
-  window.__fl = { mainFoods, mealById, library, S, R, save, show, weeklyExport, offLookup, parseLabel, lookupAndOpen, storeCheck, ensurePlan, addSwapToGrocery, renderPlan, renderPicker, packPayload, unpackPayload, buildLink, linkCard, shareLink, handleLinkHash, applyMemberCard, askLeftovers, saveLeftovers, archiveLeftovers, renderLeftovers, loMatches, eatLeftover, hhNeeds, hhExport, hhImport, hhMerged, hhAll, renderHousehold, zipInfo, zipHint, zipToState, myState, seasonShare, seasonTable, seasonSort, makeOptions, mealSuggestHTML, parseIngredientText, startVoice, queueVoice, renderVoiceQueue, pantryUseEntry, pantryAdd, pantryUse, pantryDue, pantryRecipes, renderPantryNudge, renderPantryList, mealBlocked, weekPlanDays, researchWeekPlan, userAllergens, conflict, slotOf, migrateMealIds, mealHour, gInfo, walmartPick, satisfied, checkHolds, addMealThisWeek, approveWeek, weekKey, boughtState, markCooked, walmartCartUrl, renderGrocery, storeKey, availHTML, exportProfile, markScannedForToCook, planDaysAhead, saveToCook, renderToCook, tonightItem, dinnerHour, resolveSwapQueue, swapsFor };
+  window.__fl = { computeGaps, gapText, renderGapAvg, mainFoods, mealById, library, S, R, save, show, weeklyExport, offLookup, parseLabel, lookupAndOpen, storeCheck, ensurePlan, addSwapToGrocery, renderPlan, renderPicker, packPayload, unpackPayload, buildLink, linkCard, shareLink, handleLinkHash, applyMemberCard, askLeftovers, saveLeftovers, archiveLeftovers, renderLeftovers, loMatches, eatLeftover, hhNeeds, hhExport, hhImport, hhMerged, hhAll, renderHousehold, zipInfo, zipHint, zipToState, myState, seasonShare, seasonTable, seasonSort, makeOptions, mealSuggestHTML, parseIngredientText, startVoice, queueVoice, renderVoiceQueue, pantryUseEntry, pantryAdd, pantryUse, pantryDue, pantryRecipes, renderPantryNudge, renderPantryList, mealBlocked, weekPlanDays, researchWeekPlan, userAllergens, conflict, slotOf, migrateMealIds, mealHour, gInfo, walmartPick, satisfied, checkHolds, addMealThisWeek, approveWeek, weekKey, boughtState, markCooked, walmartCartUrl, renderGrocery, storeKey, availHTML, exportProfile, markScannedForToCook, planDaysAhead, saveToCook, renderToCook, tonightItem, dinnerHour, resolveSwapQueue, swapsFor };
 })();
 
 /* ---------- resolve offline-queued barcodes when back online ---------- */
@@ -1807,13 +1814,16 @@ function renderTodayGoals(es, total) {
 }
 
 /* ---------- progress screen ---------- */
+function renderGapAvg() { const el = $('#gapAvg'); if (!el) return; computeGaps(); const from = startOfDay(addDays(new Date(), -6)).getTime(); const seen = new Set(), gs = [];
+  for (const e of S.entries.filter(e => e.ts >= from && e.gapMinutes != null).sort((a, b) => a.ts - b.ts)) { const k = e.ts - e.gapMinutes * 60000; if (!seen.has(k)) { seen.add(k); gs.push(e.gapMinutes); } }
+  el.innerHTML = gs.length ? `<div class="card"><b>⏱️ Time between meals</b><div class="sub">Average ${fmtGap(Math.round(gs.reduce((a, b) => a + b, 0) / gs.length))} over the last 7 days (${gs.length} gap${gs.length === 1 ? '' : 's'}, overnight not counted)</div></div>` : ''; }
 function renderProgress() {
   const ph = currentPhase(), adj = adjustments();
   const pa = adj.find(a => (ph === 2 ? isPhase2(a) : isPhase1(a)));
   $('#phaseCard').innerHTML = ph ? `<div class="card enc"><b>${ph === 1 ? '🌱 Phase 1: regular meals first' : '🫒 Phase 2: swapping ultra-processed foods'}</b>${pa ? `<div class="sub" style="color:var(--ink)">${esc(pa.effect)}</div>${allergyNotesHTML(allergyAware(pa).notes)}<div class="src">${evBadge(pa)} ${srcLinks(pa.sources)}</div>` : ''}</div>`
     : (R.quiz ? `<div class="card"><b>📝 Questionnaire</b><div class="sub">5 minutes. It tailors your plan and phase.</div><button class="btn primary big" id="pqBtn">Start questionnaire</button></div>` : '');
   $('#pqBtn') && ($('#pqBtn').onclick = () => { renderQuiz(); show('quiz'); });
-  renderSteps(); renderFocusGoal(); renderGoals(); renderNova(); renderMedas(); renderSodium();
+  renderGapAvg(); renderSteps(); renderFocusGoal(); renderGoals(); renderNova(); renderMedas(); renderSodium();
   const focus = adj.filter(a => a.active && !isDocRule(a) && !isPhase1(a) && !isPhase2(a)).map(a => ({ ...a, aa: allergyAware(a) })).filter(a => a.aa.ok);
   $('#focusBody').innerHTML = focus.length ? `<div class="card"><b>Tailored to your answers</b><ul class="focus snack-list">${focus.map(a => `<li>${esc(a.effect)}${allergyNotesHTML(a.aa.notes)}<div class="src">${evBadge(a)} ${srcLinks(a.sources)}</div></li>`).join('')}</ul></div>` : '';
 }
