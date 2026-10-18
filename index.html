@@ -61,6 +61,8 @@
 <!-- TODAY -->
 <section class="screen" id="s-today">
   <div id="homeAlerts"></div>
+  <div id="tonightCard" hidden></div>
+  <div class="card" id="toCookCard" hidden></div>
   <div class="card timer-card">
     <div class="label">Since last meal</div>
     <div class="timer" id="timer">—</div>
@@ -270,6 +272,7 @@
   <button data-tab="grocery"><span>🛒</span>Grocery</button>
 </nav>
 
+<dialog id="cookView"><div id="cookBody"></div></dialog>
 <dialog id="settings">
   <form method="dialog" class="dlg">
     <h2>More</h2>

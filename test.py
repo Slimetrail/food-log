@@ -38,7 +38,7 @@ try:
     ok('phase 1 chip on home', 'Phase 1' in pg.inner_text('#homeAlerts'))
     # wait for SW precache
     pg.evaluate("navigator.serviceWorker.ready"); pg.wait_for_function("caches.keys().then(k=>k.length>0)")
-    pg.wait_for_function("caches.open('foodlog-v3').then(c=>c.match('vendor/tessdata/eng.traineddata.gz')).then(r=>!!r)", timeout=60000)
+    pg.wait_for_function("caches.open('foodlog-v5').then(c=>c.match('vendor/tessdata/eng.traineddata.gz')).then(r=>!!r)", timeout=60000)
     ok('service worker precached OCR data', True)
     # --- real Open Food Facts lookups ---
     pg.click('#bigAdd'); pg.wait_for_selector('#s-add:not([hidden])')
@@ -118,6 +118,20 @@ try:
     ok('meal ingredients added (7) with If-out backups', len(added) == 7 and all(g['backups'] for g in added[:2]))
     pg.click('#ffCancel'); pg.click('#addBack'); pg.click('.tabs [data-tab=grocery]'); pg.wait_for_timeout(300)
     pg.evaluate("document.querySelector('#groceryList').scrollIntoView({block:'start'});scrollBy(0,-90)"); shot(pg, '17b-mac-cheese-added')
+    tc = pg.evaluate('__fl.S.toCook'); ok('homemade swap saved to To cook with research steps + ingredients', len(tc) == 1 and tc[0]['mealId'] == 'dinner-wholewheat-mac-cheese-broccoli' and len(tc[0]['steps']) == 4 and len(tc[0]['ingredients']) == 7)
+    ok('non-homemade swap (boxed step) not saved to To cook', pg.evaluate("(async()=>{const n=__fl.S.toCook.length;await __fl.addSwapToGrocery({name:'Better boxed mac & cheese (store-bought step)'});const r=__fl.S.toCook.length===n;__fl.S.grocery=__fl.S.grocery.filter(g=>!/store-bought/.test(g.name));return r})()"))
+    pg.click('#groceryList li >> nth=0 >> input[type=checkbox]'); pg.click('#groceryList li >> nth=1 >> input[type=checkbox]')
+    pg.evaluate("__fl.R.timing.dinnerHour=new Date().getHours()")  # TEST: research has no dinner hour yet; simulate dinner time
+    pg.click('.tabs [data-tab=today]'); pg.wait_for_timeout(300)
+    ok('To cook card lists the meal with 2 of 7 bought', pg.is_visible('#toCookCard') and '2 of 7 ingredients bought' in pg.inner_text('#toCookCard'))
+    ok('Tonight banner at dinner time', pg.is_visible('#tonightCard') and 'Tonight: you bought ingredients for' in pg.inner_text('#tonightCard'))
+    pg.evaluate('scrollTo(0,0)'); shot(pg, '19-to-cook-card')
+    pg.click('#tonightCard .tonight-btn'); pg.wait_for_selector('#cookView[open]')
+    cv = pg.inner_text('#cookView'); ok('cook view: numbered steps + bought states', pg.locator('#cookView ol.cook-steps li').count() == 4 and cv.count('✓ bought') == 2 and cv.count('not bought yet') == 5 and 'If out:' in cv)
+    pg.wait_for_timeout(200); print('SCROLL', pg.evaluate("[document.getElementById('cookView').scrollTop, document.getElementById('cookView').scrollHeight]")); shot(pg, '19b-cook-view')
+    pg.click('#cookDone'); pg.wait_for_timeout(400)
+    e = pg.evaluate("__fl.S.entries.find(x=>x.mealId==='dinner-wholewheat-mac-cheese-broccoli')"); ok('Mark as cooked logs research nutrition and removes item', e and e['per']['kcal'] == 616 and e['per']['protein'] == 33.6 and pg.evaluate('__fl.S.toCook.length') == 0)
+    pg.evaluate("__fl.S.entries=__fl.S.entries.filter(x=>x.mealId!=='dinner-wholewheat-mac-cheese-broccoli');__fl.save('entries');delete __fl.R.timing.dinnerHour")
     pg.evaluate("__fl.S.grocery=__fl.S.grocery.filter(g=>g.from!=='swap');__fl.save('grocery')"); pg.click('.tabs [data-tab=today]'); pg.click('#bigAdd')
     # eating out screen + quick re-log
     pg.click('.seg-btn[data-mode=out]'); pg.evaluate('scrollTo(0,0)'); shot(pg, '07-add-quick-relog-eating-out')
@@ -133,7 +147,19 @@ try:
     ok('sesame-allergy meals hidden', pg.evaluate("__fl.library().every(m=>!(m.allergens||[]).includes('sesame'))"))
     pg.evaluate('scrollTo(0,0)'); shot(pg, '08-meal-planner')
     pg.evaluate("document.querySelector('#prepCard').scrollIntoView()"); shot(pg, '08b-meal-prep')
+    # (A) plan-first: picking a dinner in the planner saves it to To cook and adds ingredients to the grocery list
+    ids = pg.evaluate("(()=>{const d=__fl.planDaysAhead()[0];return [...document.querySelectorAll(`#planDays [data-date='${d.date}'] button[data-slot=dinner]`)].map(b=>b.dataset.id).filter(id=>id!==d.meals.dinner&&(((__fl.mealById(id)||{}).ingredients||[]).length))})()")
+    picked = None
+    for mid in ids:
+      pg.evaluate("document.querySelector('#planDays details').open=true")
+      pg.click(f"#planDays details >> nth=0 >> button[data-slot=dinner][data-id='{mid}']"); pg.wait_for_timeout(300)
+      if pg.evaluate(f"__fl.planDaysAhead()[0].meals.dinner==='{mid}'"): picked = mid; break
+    print('PICKED', picked, ids, pg.evaluate("__fl.S.toCook.map(x=>[x.mealId,x.plannedDay,x.ingredients.map(i=>i.name)])") if picked else None)
+    ok('planner dinner pick -> To cook (day+slot) + grocery ingredients', picked and pg.evaluate(f"(()=>{{const d=__fl.planDaysAhead()[0].date;const t=__fl.S.toCook.find(x=>x.mealId==='{picked}'&&x.plannedDay===d&&x.slot==='dinner');return !!t && t.ingredients.every(i=>__fl.S.grocery.some(g=>g.name===i.name))}})()"))
+    pg.evaluate("__fl.S.toCook=[];__fl.save('toCook')")
     pg.click('#planToGrocery'); pg.wait_for_selector('#s-grocery:not([hidden])')
+    ok('planner meals saved to To cook with day/slot', pg.evaluate("__fl.S.toCook.length>0 && __fl.S.toCook.every(x=>x.source==='plan'&&x.plannedDay&&x.slot)"))
+    ok('planner To cook steps only from research', pg.evaluate("__fl.S.toCook.every(x=>{const m=__fl.mealById(x.mealId);return JSON.stringify(x.steps)===JSON.stringify((m&&m.steps)||[])})"))
     pg.fill('#groceryInput', 'hazelnut spread'); pg.click('#groceryForm button'); pg.fill('#groceryInput', 'cola'); pg.click('#groceryForm button')
     shot(pg, '09-grocery-list')
     pg.click('#storeBtn'); pg.fill('#storeInput', '3017620422003'); pg.click('#storeForm button'); pg.wait_for_selector('.verdict', timeout=30000)
@@ -163,6 +189,24 @@ try:
     pg.evaluate("__fl.R.swaps.push({_test:1,fromOffCategories:['en:frozen-desserts'],fromDescription:'TEST',alternatives:[{foodId:'peanut-butter-natural',name:'TEST',sources:[{title:'TEST'}]}]});__fl.resolveSwapQueue()")
     ok('needsSwap cleared when researched swap arrives', pg.evaluate("(()=>{const q=__fl.S.queue.find(q=>q.barcode==='0076840100477');return q.needsSwap===false&&!!q.swapResolvedAt})()"))
     pg.evaluate("__fl.R.swaps=__fl.R.swaps.filter(s=>!s._test)")
+    # (B) store-first: scan boxed mac & cheese, pick the homemade option for a dinner day
+    pg.evaluate("__fl.S.toCook=[];__fl.save('toCook')")
+    pg.fill('#storeInput', '0021000658831'); pg.click('#storeForm button'); pg.wait_for_function("document.querySelector('.verdict') && /mac/i.test(document.querySelector('.verdict h3').textContent)", timeout=30000)
+    ok('store mode: homemade swap has dinner day chooser', pg.locator('.verdict .swaps li >> nth=0 >> .swap-day select').count() == 1)
+    day = pg.evaluate("__fl.planDaysAhead()[2].date"); pg.select_option('.verdict .swaps li >> nth=0 >> .swap-day select', day)
+    pg.click('.verdict .swaps li >> nth=0 >> .swap-add'); pg.wait_for_timeout(400)
+    ok('store pick -> meal on chosen dinner day in plan', pg.evaluate(f"__fl.S.plan.days.find(d=>d.date==='{day}').meals.dinner") == 'dinner-wholewheat-mac-cheese-broccoli')
+    ok('store pick -> To cook (store, dinner) + ingredients on grocery list', pg.evaluate(f"(()=>{{const t=__fl.S.toCook.find(x=>x.source==='store'&&x.plannedDay==='{day}'&&x.slot==='dinner');return !!t&&t.ingredients.length===7&&t.ingredients.every(i=>__fl.S.grocery.some(g=>g.name===i.name))}})()"))
+    pg.evaluate("document.querySelector('.verdict .swaps li .swap-day').scrollIntoView({block:'center'})"); shot(pg, '19c-store-to-dinner')
+    # scanning a real ingredient (extra virgin olive oil, OFF live, NOVA 2) marks it bought on To cook
+    pg.fill('#storeInput', '8410660101153'); pg.click('#storeForm button'); pg.wait_for_function("document.querySelector('.verdict') && !/mac/i.test(document.querySelector('.verdict h3').textContent)", timeout=30000); pg.wait_for_timeout(300)
+    ok('scanned ingredient marked bought on To cook', pg.evaluate("__fl.S.toCook[0].ingredients.find(i=>/olive oil/i.test(i.name)).bought===true") and 'Bought for To cook' in pg.inner_text('.verdict'))
+    ok('boxed NOVA 4 scan did not mark cheese bought', not pg.evaluate("__fl.S.toCook[0].ingredients.find(i=>/cheddar/i.test(i.name)).bought"))
+    pg.click('.tabs [data-tab=plan]'); pg.wait_for_timeout(300); ok('meal shows in week plan on its day', 'mac & cheese' in pg.inner_text(f"#planDays [data-date='{day}']"))
+    pg.click('.tabs [data-tab=today]'); pg.click('#toCookCard .cook-item >> nth=0'); pg.wait_for_selector('#cookView[open]')
+    ok('cook view shows olive oil bought', '✓ bought' in pg.inner_text('#cookView'))
+    pg.click('#cookRemove'); pg.wait_for_timeout(300)
+    pg.evaluate("__fl.S.grocery=__fl.S.grocery.filter(g=>g.from!=='swap');__fl.save('grocery')"); pg.click('.tabs [data-tab=grocery]')
     pg.click('#storeClose')
     pg.click('.tabs [data-tab=progress]'); pg.wait_for_timeout(300)
     if pg.is_visible('#stepPick button'):
@@ -184,7 +228,10 @@ try:
     ok('weekly export has profile/questionnaire/logs/skips/goals/queue', all(k in exp and exp[k] is not None for k in ['profile', 'questionnaire', 'week', 'logs', 'skippedMeals', 'goals', 'researchQueue', 'dailyActivity']))
     json.dump(exp, open(f'{OUT}/sample-weekly-checkin.json', 'w'), indent=1)
     # --- offline ---
+    pg.evaluate("__fl.saveToCook({mealId:'dinner-wholewheat-mac-cheese-broccoli'},'swap')"); pg.wait_for_timeout(200)
     ctx.set_offline(True); pg.reload(); pg.wait_for_selector('#s-today:not([hidden])')
+    n_tc = pg.evaluate('__fl.S.toCook.length'); pg.click('#toCookCard .cook-item >> nth=0'); pg.wait_for_selector('#cookView[open]'); ok('cook view works offline', pg.locator('#cookView h2').count() == 1)
+    pg.click('#cookRemove'); pg.wait_for_timeout(300); ok('Remove deletes from To cook', pg.evaluate('__fl.S.toCook.length') == n_tc - 1 and not pg.is_visible('#cookView'))
     ok('app loads offline', pg.evaluate('__fl.S.entries.length') == 3)
     ok('OCR engine files available offline', pg.evaluate("Promise.all(['vendor/tesseract.min.js','vendor/worker.min.js','vendor/tesseract-core/tesseract-core-simd-lstm.wasm.js','vendor/tessdata/eng.traineddata.gz'].map(u=>fetch(u).then(r=>r.ok))).then(a=>a.every(Boolean))"))
     pg.click('#bigAdd'); pg.fill('#barcodeInput', '3017620422003'); pg.click('#barcodeForm button'); pg.wait_for_selector('#foodForm:not([hidden])')

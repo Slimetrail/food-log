@@ -234,3 +234,15 @@ details.cite[open]{display:block;width:100%;background:#f6f8f4;border-radius:8px
 .swaps .btn.swap-add,.swaps .btn.swap-it{display:block;width:100%;min-height:48px;margin-top:6px;font-size:16px}
 #groceryList .backup{display:block;font-size:14px;color:#6b7280}
 .swaps.needs-research{background:#eef4ff;border-color:#c7d7f5}
+
+.cook-list{list-style:none;margin:6px 0 0;padding:0}.cook-list li{margin-top:8px}
+.cook-item,.tonight-btn{display:block;width:100%;text-align:left;min-height:56px;padding:12px 14px;border-radius:14px;border:1px solid #d6e4d8;background:#fff;font-size:17px}
+.cook-item .nm{display:block;font-weight:600}.cook-item .sub,.tonight-btn .sub{display:block}
+.tonight-btn{background:#fff7e6;border-color:#f1d9a6;margin-bottom:12px}
+#cookView{width:min(96vw,560px);max-height:92vh;border:0;border-radius:18px;padding:16px}
+#cookView h2{margin:0 0 6px;font-size:21px}#cookView h3{margin:14px 0 6px;font-size:17px}
+.cook-ings{list-style:none;padding:0;margin:0}.cook-ings li{padding:10px 0;border-bottom:1px solid #eee;font-size:16px}
+.cook-ings .st{float:right;color:#6b7280;font-size:14px}.cook-ings li.got .st{color:#2e7d32;font-weight:600}
+.cook-steps{padding-left:22px;font-size:16px}.cook-steps li{margin-bottom:8px}
+.cook-actions{display:grid;gap:8px;margin-top:14px}.btn.big{min-height:52px;font-size:17px}
+.swap-day{display:block;margin-top:8px;font-size:15px}.swap-day select{display:block;width:100%;min-height:48px;font-size:16px;margin-top:4px}

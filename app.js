@@ -27,7 +27,7 @@ const DB = {
   get(k) { return new Promise(res => { const r = this.db.transaction('kv').objectStore('kv').get(k); r.onsuccess = () => res(r.result); r.onerror = () => res(undefined); }); },
   set(k, v) { return new Promise(res => { const t = this.db.transaction('kv', 'readwrite'); t.objectStore('kv').put(v, k); t.oncomplete = res; t.onerror = res; }); }
 };
-const S = { planAnchor: null, stepChecks: {}, mySteps: [], phaseLog: [], medas: [], focus: [], skips: [], tipDismissed: {}, water: {}, favorites: [], offCache: {}, pendingScans: [], goals: null, weights: [], quizHistory: [], entries: [], grocery: [], myMeals: [], plan: null, queue: [], profile: null, dailyActivity: {}, quiz: null, settings: { waterTarget: null, waterField: null, target: null, targetMin: null, planMode: 'weekly', units: 'us', intervalH: null, notify: false } };
+const S = { toCook: [], planAnchor: null, stepChecks: {}, mySteps: [], phaseLog: [], medas: [], focus: [], skips: [], tipDismissed: {}, water: {}, favorites: [], offCache: {}, pendingScans: [], goals: null, weights: [], quizHistory: [], entries: [], grocery: [], myMeals: [], plan: null, queue: [], profile: null, dailyActivity: {}, quiz: null, settings: { waterTarget: null, waterField: null, target: null, targetMin: null, planMode: 'weekly', units: 'us', intervalH: null, notify: false } };
 const KEYS = Object.keys(S);
 async function loadState() { for (const k of KEYS) { const v = await DB.get(k); if (v !== undefined) S[k] = (k === 'settings') ? { ...S.settings, ...v } : v; } }
 const save = (...ks) => Promise.all(ks.map(k => DB.set(k, S[k])));
@@ -123,7 +123,17 @@ function resolveSwapQueue() {
   for (const q of S.queue || []) if (q.needsSwap) { const m = mapProduct(q.offCategories || [], q.name); if (swapsFor({ name: q.name, cats: q.offCategories, foodId: m.food && m.food.id })) { q.needsSwap = false; q.swapResolvedAt = new Date().toISOString(); n++; } }
   if (n) { save('queue'); toast(`🔁 Research found swaps for ${n} scanned product${n === 1 ? '' : 's'}`); }
 }
-const SWAPSETS = []; let lastStoreItem = null;
+const SWAPSETS = []; let lastScanned = null;
+function dinnerDayOptions() {
+  const days = planDaysAhead().slice(0, 7); if (!days.length) return `<option value="${dayKey(new Date())}">Today</option>`;
+  const open = days.find(d => !d.meals.dinner);
+  return days.map(d => `<option value="${d.date}"${open && d.date === open.date ? ' selected' : ''}>${esc(fmtDay(fromKey(d.date)).split(',')[0])}${d.meals.dinner ? ' (replaces ' + esc((mealById(d.meals.dinner) || {}).name || 'dinner') + ')' : ' · open'}</option>`).join('');
+}
+async function planDinner(mealId, date) {
+  if (!mealId || !S.plan) return false; const d = S.plan.days.find(x => x.date === date); if (!d || !mealById(mealId)) return false;
+  d.meals.dinner = mealId; d.options = d.options || {}; d.options.dinner = d.options.dinner || []; if (!d.options.dinner.includes(mealId)) d.options.dinner.push(mealId);
+  await save('plan'); return true;
+} let lastStoreItem = null;
 function swapsHTML(ctx) {
   const sw = swapsFor(ctx);
   if (!sw && (R.swaps.length || R.foods.length)) {
@@ -136,7 +146,7 @@ function swapsHTML(ctx) {
   return `<div class="swaps" data-sid="${sid}"><b>🔁 Better swaps</b>${sw.kind === 'group' ? `<div class="sub">Better-rated ${esc(sw.from)} from your research list</div>` : (sw.from ? `<div class="sub">Instead of ${esc(sw.from)}</div>` : '')}
   <div class="swap-ask">Want to swap? Add one to your grocery list.</div>
   <ul>${sw.items.map((a, i) => `<li><b>${esc(String(a.name || (a.food && a.food.name) || '').replace(/\s*\(meal '[^']*'\)\s*$/, ''))}</b>${a.food && a.food.rating && !a.mealId && !(a.ingredients && a.ingredients.length) ? ` <span class="tag rate-${a.food.rating}">${RATING[a.food.rating]}</span>` : ''}${a.why ? `<div>${esc(a.why)}</div>` : ''}${a.lookFor ? `<div class="look">🔎 Look for: ${esc(a.lookFor)}</div>` : ''}<div class="src">${evBadge(a)} ${srcLinks(a.sources)}</div>
-  <button type="button" class="btn swap-add" data-i="${i}">➕ Add to grocery list</button>${storeId ? `<button type="button" class="btn primary swap-it" data-i="${i}" data-item="${esc(storeId)}">🔁 Swap it: take this off my list, add the alternative</button>` : ''}</li>`).join('')}</ul></div>`;
+  ${ctx.store && isHomemade(a) ? `<label class="swap-day">Cook it for dinner on <select data-i="${i}">${dinnerDayOptions()}</select></label>` : ''}<button type="button" class="btn swap-add" data-i="${i}">${ctx.store && isHomemade(a) ? '🍳 Make it for dinner + add to list' : '➕ Add to grocery list'}</button>${storeId ? `<button type="button" class="btn primary swap-it" data-i="${i}" data-item="${esc(storeId)}">🔁 Swap it: take this off my list, add the alternative</button>` : ''}</li>`).join('')}</ul></div>`;
 }
 const swapBlocked = x => (x.allergens || []).map(normAllergen).some(a => userAllergens().includes(a)) || (x.foodId ? foodBlocked(R.foodById[x.foodId]) : false) || excluded(x.name);
 function swapGroceryItems(a) {
@@ -147,11 +157,82 @@ function swapGroceryItems(a) {
   for (const it of ings) {
     let pick = it; const backs = (it.backups || it.substitutes || []).filter(b => !swapBlocked(b));
     if (swapBlocked(it)) { pick = backs.shift(); if (!pick) continue; }
-    out.push({ name: pick.name, text: pick.name + (pick === it && pick.amount != null ? ' — ' + pick.amount + (pick.unit ? ' ' + pick.unit : '') : ''), backups: backs.filter(b => b !== pick).map(b => b.name) });
+    out.push({ name: pick.name, substitutedFor: pick === it ? null : it.name, amount: pick === it ? it.amount ?? null : null, unit: pick === it ? it.unit || '' : '', text: pick.name + (pick === it && pick.amount != null ? ' — ' + pick.amount + (pick.unit ? ' ' + pick.unit : '') : ''), backups: backs.filter(b => b !== pick).map(b => b.name) });
   }
   return out;
 }
-async function addSwapToGrocery(a, removeId) {
+/* ---------- To cook ---------- */
+const isHomemade = a => !!(a && (a.mealId || (Array.isArray(a.ingredients) && a.ingredients.length) || (Array.isArray(a.steps) && a.steps.length)));
+async function saveToCook(a, source, plannedDay, slot) {
+  const meal = a.mealId ? mealById(a.mealId) : (a.ingredients && a.steps ? null : null);
+  const mealId = a.mealId || null, name = String((meal && meal.name) || a.name || '').replace(/\s*\(meal '[^']*'\)\s*$/, '');
+  if (S.toCook.some(t => (mealId ? t.mealId === mealId : t.name === name) && (t.plannedDay || null) === (plannedDay || null) && (t.slot || null) === (slot || null))) return false;
+  const steps = (meal && Array.isArray(meal.steps) ? meal.steps : Array.isArray(a.steps) ? a.steps : []).filter(x => typeof x === 'string');
+  const ings = swapGroceryItems(a).filter(i => i.name).map(i => ({ name: i.name, amount: i.amount, unit: i.unit, backups: i.backups || [], substitutedFor: i.substitutedFor || null }));
+  S.toCook.push({ id: uid(), mealId, name, ingredients: ings, steps, addedAt: new Date().toISOString(), plannedDay: plannedDay || null, slot: slot || null, source });
+  await save('toCook'); return true;
+}
+const boughtState = ing => { if (ing && typeof ing === 'object' && ing.bought) return 'bought'; const name = typeof ing === 'object' ? ing.name : ing; const g = S.grocery.filter(x => (x.name || x.text).toLowerCase() === String(name).toLowerCase()); return g.some(x => x.done) ? 'bought' : g.length ? 'list' : 'none'; };
+const ING_STOP = new Set(['cooked', 'raw', 'frozen', 'boiled', 'plain', 'reduced', 'fat', 'whole', 'canned', 'dry', 'fresh', 'hard', 'part', 'skim', 'any', 'other', 'brand', 'size', 'and', 'with', 'the', 'unsweetened', 'extra', 'virgin', 'brands', 'shapes', 'based']);
+const keyWords = s => words(s).map(stem).filter(w => !ING_STOP.has(w));
+function productMatches(p, name) { if (!p || p.nova == 4) return false; const pw = new Set([...words(p.name), ...(p.categories || []).filter(c => /^en:/.test(c)).flatMap(c => words(c.slice(3).replace(/-/g, ' ')))].map(stem)); const kw = keyWords(name); return kw.length > 0 && kw.every(w => pw.has(w)); }
+// a scanned product counts as buying any matching To-cook ingredient (or one of its backups)
+async function markScannedForToCook(p) {
+  let hits = [];
+  for (const t of S.toCook) for (const i of t.ingredients) {
+    if (boughtState(i) === 'bought') continue;
+    const viaBackup = !productMatches(p, i.name) && (i.backups || []).find(b => productMatches(p, b));
+    if (productMatches(p, i.name) || viaBackup) { i.bought = true; i.boughtProduct = p.name || ''; if (viaBackup) i.gotBackup = viaBackup;
+      const g = S.grocery.find(x => !x.done && (x.name || x.text).toLowerCase() === i.name.toLowerCase()); if (g) g.done = true; hits.push(i.name); }
+  }
+  if (hits.length) await save('toCook', 'grocery');
+  return hits;
+}
+function dinnerHour() { const T = R.timing || {}; const h = T.dinnerHour ?? (T.slots && T.slots.dinner && T.slots.dinner.hour) ?? (Array.isArray(T.mealTimes) ? (T.mealTimes.find(x => x.slot === 'dinner') || {}).hour : null); return typeof h === 'number' ? h : null; }
+let mealDueNow = false;
+function tonightItem() {
+  const tk = dayKey(new Date()), h = dinnerHour(), now = new Date();
+  const time = h != null ? now.getHours() >= h - 1 && now.getHours() < h + 3 : mealDueNow;
+  if (!time) return null;
+  return S.toCook.find(t => (!t.plannedDay || t.plannedDay === tk) && (!t.slot || t.slot === 'dinner') && t.ingredients.some(i => boughtState(i) === 'bought')) || null;
+}
+function renderToCook() {
+  const el = $('#toCookCard'); if (!el) return;
+  const tn = tonightItem();
+  $('#tonightCard').hidden = !tn;
+  if (tn) $('#tonightCard').innerHTML = `<button class="tonight-btn" data-cook="${tn.id}">🌙 Tonight: you bought ingredients for <b>${esc(tn.name)}</b><span class="sub">Tap to see the steps</span></button>`;
+  if (!S.toCook.length) { el.hidden = true; return; }
+  el.hidden = false;
+  const list = [...S.toCook].sort((a, b) => String(a.plannedDay || '9').localeCompare(String(b.plannedDay || '9')));
+  el.innerHTML = `<b>🍳 To cook</b><ul class="cook-list">${list.map(t => { const n = t.ingredients.length, b = t.ingredients.filter(i => boughtState(i) === 'bought').length;
+    return `<li><button class="cook-item" data-cook="${t.id}"><span class="nm">${esc(t.name)}</span><span class="sub">${t.plannedDay ? esc(fmtDay(fromKey(t.plannedDay)).split(',')[0]) + (t.slot ? ' · ' + esc(t.slot) : '') + ' · ' : ''}${n ? `${b} of ${n} ingredients bought` : 'No ingredient list'}</span></button></li>`; }).join('')}</ul>`;
+}
+function openCook(id) {
+  const t = S.toCook.find(x => x.id === id); if (!t) return;
+  const meal = t.mealId && mealById(t.mealId), nut = meal && meal.nutritionApprox;
+  $('#cookBody').innerHTML = `<h2>${esc(t.name)}</h2>
+    <h3>Ingredients</h3><ul class="cook-ings">${t.ingredients.map(i => { const st = boughtState(i);
+      return `<li class="${st === 'bought' ? 'got' : ''}"><span>${esc(i.name)}${i.amount != null ? ' — ' + esc(r1(i.amount)) + (i.unit ? ' ' + esc(i.unit) : '') : ''}</span><span class="st">${st === 'bought' ? '✓ bought' : 'not bought yet'}</span>${i.gotBackup ? `<div class="sub">✓ Got backup: ${esc(i.gotBackup)}${i.boughtProduct ? ' (' + esc(i.boughtProduct) + ')' : ''}</div>` : ''}${i.substitutedFor ? `<div class="sub">Backup used instead of ${esc(i.substitutedFor)} (your allergy list)</div>` : ''}${i.backups.length ? `<div class="sub">If out: ${i.backups.map(esc).join(' or ')}</div>` : ''}</li>`; }).join('') || '<li class="sub">No ingredient list from research.</li>'}</ul>
+    <h3>Steps</h3>${t.steps.length ? `<ol class="cook-steps">${t.steps.map(x => `<li>${esc(x)}</li>`).join('')}</ol>` : '<div class="sub">Research has no steps for this one yet.</div>'}
+    ${nut && nut.kcal != null ? `<div class="sub">About ${esc(nut.kcal)} kcal per serving · research nutrition${meal.evidence ? ' · ' + esc(meal.evidence) + ' evidence' : ''}</div>${srcLinks(meal.sources)}` : ''}
+    <div class="cook-actions"><button class="btn primary big" id="cookDone" data-id="${t.id}">✅ Mark as cooked</button><button class="btn big" id="cookRemove" data-id="${t.id}">Remove</button><button class="btn big" id="cookClose">Close</button></div>`;
+  const d = $('#cookView'); if (!d.open) d.showModal(); document.activeElement && document.activeElement.blur(); d.scrollTop = 0; setTimeout(() => { d.scrollTop = 0; }, 50);
+}
+async function markCooked(id) {
+  const t = S.toCook.find(x => x.id === id); if (!t) return;
+  const meal = t.mealId && mealById(t.mealId), nut = (meal && meal.nutritionApprox) || null;
+  const per = {}; if (nut) for (const k of NUTS) per[k] = nut[NUT_EXPORT[k]] ?? null;
+  S.entries.push({ id: uid(), ts: Date.now(), name: t.name, brand: '', barcode: '', source: nut ? 'research-meal' : 'manual', basis: 'serving', servingSize: '1 serving (research recipe)', per, qty: 1, categories: [], foodId: null, mealId: t.mealId, group: '', nova: null, social: false, thumb: null, ingredientsText: t.ingredients.map(i => i.name).join(', ') });
+  S.toCook = S.toCook.filter(x => x !== t); await save('entries', 'toCook');
+  $('#cookView').close(); toast(nut ? `Logged ${t.name} (${nut.kcal} kcal, research nutrition)` : `Logged ${t.name}. Research has no nutrition for it, so add values if you know them.`, 3500); show('today');
+}
+document.addEventListener('click', async e => {
+  const c = e.target.closest('[data-cook]'); if (c) { e.preventDefault(); return openCook(c.dataset.cook); }
+  if (e.target.id === 'cookDone') return markCooked(e.target.dataset.id);
+  if (e.target.id === 'cookRemove') { S.toCook = S.toCook.filter(x => x.id !== e.target.dataset.id); await save('toCook'); $('#cookView').close(); renderToCook(); toast('Removed from To cook'); }
+  if (e.target.id === 'cookClose') $('#cookView').close();
+});
+async function addSwapToGrocery(a, removeId, opts = {}) {
   let removed = '';
   if (removeId) { const g = S.grocery.find(x => x.id === removeId); if (g) { removed = g.text; S.grocery = S.grocery.filter(x => x !== g); } }
   let added = 0, dup = 0;
@@ -160,13 +241,18 @@ async function addSwapToGrocery(a, removeId) {
     if (S.grocery.some(g => !g.done && (g.name || g.text).toLowerCase() === it.name.toLowerCase())) { dup++; continue; }
     S.grocery.push({ id: uid(), text: it.text, name: it.name, backups: it.backups, done: false, from: 'swap' }); added++;
   }
+  let cooked = false;
+  if (isHomemade(a) && opts.dinnerDay) { await planDinner(a.mealId, opts.dinnerDay); cooked = await saveToCook(a, 'store', opts.dinnerDay, 'dinner'); }
+  else if (isHomemade(a) && opts.day) cooked = await saveToCook(a, 'plan', opts.day, opts.slot);
+  else if (isHomemade(a)) cooked = await saveToCook(a, 'swap');
   await save('grocery'); renderGrocery();
-  toast((removed ? `Removed "${removed}". ` : '') + (added ? `Added ${added} item${added === 1 ? '' : 's'} to your grocery list` : 'Already on your grocery list') + (added && dup ? ` (${dup} already there)` : ''));
+  toast((cooked ? '🍳 Saved to To cook. ' : '') + (removed ? `Removed "${removed}". ` : '') + (added ? `Added ${added} item${added === 1 ? '' : 's'} to your grocery list` : 'Already on your grocery list') + (added && dup ? ` (${dup} already there)` : ''));
 }
 document.addEventListener('click', e => {
   const b = e.target.closest('.swap-add, .swap-it'); if (!b) return; e.preventDefault();
   const items = SWAPSETS[+b.closest('.swaps').dataset.sid]; const a = items && items[+b.dataset.i]; if (!a) return;
-  addSwapToGrocery(a, b.classList.contains('swap-it') ? b.dataset.item : null).then(() => { if (b.classList.contains('swap-it')) b.closest('.swaps').querySelectorAll('.swap-it').forEach(x => x.remove()); });
+  const li = b.closest('li'), sel = li && li.querySelector('.swap-day select'), inStore = !!b.closest('.verdict');
+  addSwapToGrocery(a, b.classList.contains('swap-it') ? b.dataset.item : null, inStore && isHomemade(a) ? { dinnerDay: sel ? sel.value : (planDaysAhead().find(d => !d.meals.dinner) || {}).date || dayKey(new Date()), scanned: lastScanned } : {}).then(() => { if (b.classList.contains('swap-it')) b.closest('.swaps').querySelectorAll('.swap-it').forEach(x => x.remove()); });
 });
 
 /* ---------- navigation ---------- */
@@ -257,13 +343,13 @@ function tick() {
     planHtml = `🥾 Field day: eat a meal ${ph ? ph.min + '–' + ph.max + ' h before you head out' : 'before heading out'}; on hikes over ${fu.appliesWhenActivityLongerThanHours} h, fuel every ${fu.intervalHours} h${rh ? `; recovery meal within ${rh} h after` : ''}.`; }
   if (minH == null && S.settings.intervalH) { minH = S.settings.intervalH; src = 'your reminder interval (research has no value for today)'; }
   if (minH == null) { $('#nextMeal').innerHTML = (planHtml || 'Meal timing: <i>coming from research</i>') + '<div class="sub">Set a reminder interval in ⚙️ for a countdown</div>' + srcHtml; return; }
-  const due = l.ts + minH * 3600000, left = due - Date.now();
+  const due = l.ts + minH * 3600000, left = due - Date.now(); const wasDue = mealDueNow; mealDueNow = left <= 0; if (wasDue !== mealDueNow) renderToCook();
   let html = left > 0 ? `${fu && rule.activity === 'field' && src === 'research' ? 'Next snack on the trail in' : 'Next meal or snack in'} <b>${hms(left)}</b>` : `<b>Time to refuel 🍎</b> — even a small snack counts`;
   html += fu && rule.activity === 'field' && src === 'research' ? `<div class="sub">Hike fuel every ${minH} h (hikes over ${fu.appliesWhenActivityLongerThanHours} h)</div>` : maxH ? `<div class="sub">Usually ${minH}–${maxH} h after your last meal · ${esc(src)}</div>` : `<div class="sub">Every ${minH} h · ${esc(src)}</div>`;
   $('#nextMeal').innerHTML = (planHtml ? planHtml + '<div style="height:6px"></div>' : '') + html + srcHtml;
   if (left <= 0 && S.settings.notify && notifiedFor !== l.id && 'Notification' in window && Notification.permission === 'granted') {
     notifiedFor = l.id;
-    navigator.serviceWorker?.ready.then(r => r.showNotification('Food Log', { body: 'Time to refuel 🍎 A small snack or meal would be great right now.', icon: 'icons/icon-192.png', tag: 'meal-due' })).catch(() => new Notification('Food Log', { body: 'Time to refuel 🍎 A small snack or meal would be great right now.' }));
+    navigator.serviceWorker?.ready.then(r => r.showNotification('Food Log', { body: 'Time to refuel 🍎 ' + (tonightItem() ? 'Tonight: you bought ingredients for ' + tonightItem().name + '.' : 'A small snack or meal would be great right now.'), icon: 'icons/icon-192.png', tag: 'meal-due' })).catch(() => new Notification('Food Log', { body: 'Time to refuel 🍎 A small snack or meal would be great right now.' }));
   }
 }
 setInterval(() => { if (curTab === 'today') tick(); }, 1000);
@@ -301,7 +387,7 @@ function renderToday() {
   else tl.textContent = 'Set a daily minimum (and optional max) in ⚙️';
   const goal = mn || mx, bar = $('#targetBar');
   bar.style.width = goal ? Math.min(100, 100 * total / goal) + '%' : '0'; bar.classList.toggle('over', !mn && !!mx && total > mx); $('.counter-card .bar').hidden = !goal;
-  renderTodayGoals(es, total); renderHomeAlerts(); renderNutri(es); renderHomeTips(es);
+  renderTodayGoals(es, total); renderHomeAlerts(); renderToCook(); renderNutri(es); renderHomeTips(es);
   $('#entries').innerHTML = es.map(e => {
     const kc = entryKcal(e), r = ratingFor(e.foodId, e.group);
     const amt = e.basis === '100g' ? (e.qty + ' g') : (e.qty + ' serving' + (e.qty == 1 ? '' : 's') + (e.servingSize ? ' (' + e.servingSize + ')' : ''));
@@ -753,6 +839,8 @@ function researchWeekPlan() {
   if (gap > 0 && gap < 7) days.unshift(...newDays(startOfDay(new Date()), gap, null));
   if (!days.some(d => d.date >= today) || !days.some(d => Object.keys(d.meals).length)) return null;
   days.forEach((d, i) => { if (Object.keys(d.options || {}).length && i < (gap > 0 ? gap : 0)) return; makeOptions(d, days[i - 1]); for (const slot of SLOTS) if (!d.meals[slot] && (d.options[slot] || []).length) { const m = shuffle(d.options[slot].map(mealById).filter(Boolean)).find(m => !conflict(m, d, slot, days[i - 1], days[i + 1])); if (m) d.meals[slot] = m.id; } });
+  for (let i = 0; i < (gap > 0 ? gap : 0); i++) { const d = days[i]; for (const slot of SLOTS) { const id = d.meals[slot]; if (!id) continue; const m = mealById(id); if (!m || !conflict(m, d, slot, days[i - 1], days[i + 1])) continue;
+    delete d.meals[slot]; const alt = shuffle([...(d.options[slot] || []).map(mealById), ...library().filter(x => slotOf(x) === slot)].filter(Boolean)).find(x => !conflict(x, d, slot, days[i - 1], days[i + 1])); if (alt) { d.meals[slot] = alt.id; d.options[slot] = d.options[slot] || []; if (!d.options[slot].includes(alt.id)) { if (d.options[slot].length >= 4) d.options[slot][3] = alt.id; else d.options[slot].push(alt.id); } } } }
   return { start: days[0].date, mode: 'research', days, sig: 'research:' + (W.version ?? W.weekOf) + ':' + (W.revision ?? '') + ':' + (W.weekOf ?? '') };
 }
 function ensurePlan(force) {
@@ -786,8 +874,9 @@ function renderPlan() {
 $('#planDays').onclick = async e => {
   const b = e.target.closest('button[data-slot]'); if (!b) return; const det = b.closest('[data-date]'); const all = S.plan.days, i = all.findIndex(d => d.date === det.dataset.date), d = all[i];
   const m = mealById(b.dataset.id), c = conflict(m, d, b.dataset.slot, all[i - 1], all[i + 1]);
-  if (d.meals[b.dataset.slot] === m.id) delete d.meals[b.dataset.slot];
-  else { if (c) return toast("Can't pick that: " + c); d.meals[b.dataset.slot] = m.id; }
+  if (d.meals[b.dataset.slot] === m.id) { delete d.meals[b.dataset.slot]; S.toCook = S.toCook.filter(t => !(t.mealId === m.id && t.plannedDay === d.date && t.slot === b.dataset.slot)); await save('toCook'); }
+  else { if (c) return toast("Can't pick that: " + c); const old = d.meals[b.dataset.slot]; if (old) { S.toCook = S.toCook.filter(t => !(t.mealId === old && t.plannedDay === d.date && t.slot === b.dataset.slot)); await save('toCook'); } d.meals[b.dataset.slot] = m.id;
+    if (b.dataset.slot === 'dinner' && ((m.ingredients || []).length || (m.steps || []).length)) await addSwapToGrocery({ mealId: m.id, name: m.name }, null, { day: d.date, slot: 'dinner' }); }
   await save('plan'); renderPlan(); const again = $(`#planDays [data-date="${d.date}"]`); if (again) again.open = true;
 };
 $('#planMode').onchange = async () => { S.settings.planMode = $('#planMode').value; await save('settings'); ensurePlan(true); renderPlan(); };
@@ -821,7 +910,8 @@ function renderPrep() {
 $('#planToGrocery').onclick = async () => {
   const ings = combinedIngredients(planDaysAhead()); if (!ings.length) return toast('No plan ingredients to add');
   let added = 0; for (const i of ings) { const t = ingText(i); if (!S.grocery.some(g => !g.done && g.text.toLowerCase() === t.toLowerCase())) { S.grocery.push({ id: uid(), text: t, name: i.name, done: false, from: 'plan' }); added++; } }
-  await save('grocery'); toast(added + ' item' + (added === 1 ? '' : 's') + ' added to grocery list'); show('grocery');
+  let tc = 0; for (const d of planDaysAhead()) for (const [slot, id] of Object.entries(d.meals)) { const m = mealById(id); if (m && ((m.ingredients || []).length || (m.steps || []).length) && await saveToCook({ mealId: m.id, name: m.name }, 'plan', d.date, slot)) tc++; }
+  await save('grocery'); toast(added + ' item' + (added === 1 ? '' : 's') + ' added to grocery list' + (tc ? ` · ${tc} meal${tc === 1 ? '' : 's'} saved to To cook` : '')); show('grocery');
 };
 
 /* ---------- grocery ---------- */
@@ -863,8 +953,9 @@ async function storeCheck(code) {
   let p; try { p = await offLookup(code); } catch (e) { v.innerHTML = `<div class="status err">${e.offline ? 'Offline and this product isn\'t saved on your phone yet. Check the label for now.' : 'Lookup failed: ' + esc(e.message)}</div>`; return; }
   if (!p.found) { v.innerHTML = `<div class="verdict mid"><h3>Not in Open Food Facts</h3><div class="sub">Barcode ${esc(code)}. Check the label yourself.</div></div>`; return; }
   const m = mapProduct(p.categories, p.name), rating = ratingFor(m.food && m.food.id, m.group), n = p.per100 || {};
+  const cookHits = await markScannedForToCook(p);
   const item = matchGrocery(p, m.food); if (item) { item.done = true; await save('grocery'); renderGrocery(); }
-  await queueProduct(p);
+  await queueProduct(p); lastScanned = p;
   const hits = productAllergyHits(p.allergens);
   const cls = hits.length || p.nova == 4 || rating === 'limit' ? 'bad' : rating === 'eat-freely' && (p.nova == null || p.nova <= 2) ? 'good' : 'mid';
   const ratedBy = m.food && rating ? m.food : (rating ? groupInfo(m.group) : null);
@@ -872,8 +963,8 @@ async function storeCheck(code) {
     <div style="margin-top:6px">${rating ? `<span class="tag rate-${rating}">${RATING[rating]}</span> ${evBadge(ratedBy)}` : '<span class="tag">No sourced rating yet</span>'} ${p.nova ? `<span class="tag ${p.nova == 4 ? 'rate-limit' : p.nova <= 2 ? 'rate-eat-freely' : 'rate-moderation'}">NOVA ${p.nova}${p.nova == 4 ? ' · ultra-processed' : ''}</span>` : '<span class="tag">NOVA unknown</span>'}</div>
     ${ratedBy && rating ? `<div class="src">${srcLinks(ratedBy.sources)}</div>` : ''}
     ${p.per100 ? `<div class="nut"><div><b>${n.kcal ?? '–'}</b>kcal</div><div><b>${n.sugar ?? '–'}g</b>sugar</div><div><b>${n.fiber ?? '–'}g</b>fiber</div><div><b>${n.sodium ?? '–'}mg</b>sodium</div><div><b>${n.fat ?? '–'}g</b>fat</div><div><b>${n.satfat ?? '–'}g</b>sat fat</div><div><b>${n.protein ?? '–'}g</b>protein</div><div><b>${n.carbs ?? '–'}g</b>carbs</div></div><div class="sub" style="text-align:center">per 100 g · Open Food Facts</div>` : '<div class="sub">No nutrition data on Open Food Facts.</div>'}
-    ${item ? `<div class="status ok">✓ Checked off "${esc(item.text)}"</div>` : ''}${!m.food ? '<div class="sub">Added to research queue.</div>' : ''}
-    ${swapsHTML({ name: p.name, cats: p.categories, foodId: m.food && m.food.id, group: m.group, nova: p.nova, storeItemId: item && item.id, product: { barcode: p.code, name: p.name, brand: p.brand } })}</div>`;
+    ${item ? `<div class="status ok">✓ Checked off "${esc(item.text)}"</div>` : ''}${cookHits.length ? `<div class="status ok">🍳 Bought for To cook: ${cookHits.map(esc).join(', ')}</div>` : ''}${!m.food ? '<div class="sub">Added to research queue.</div>' : ''}
+    ${swapsHTML({ name: p.name, cats: p.categories, foodId: m.food && m.food.id, group: m.group, nova: p.nova, store: true, storeItemId: item && item.id, product: { barcode: p.code, name: p.name, brand: p.brand } })}</div>`;
 }
 
 /* ---------- settings ---------- */
@@ -895,7 +986,7 @@ $('#installBtn').onclick = async () => { if (deferredPrompt) { deferredPrompt.pr
   if (!S.profile) { fillProfile(); show('profile'); } else show('today');
   resolvePending();
   document.addEventListener('visibilitychange', async () => { if (document.visibilityState === 'visible' && navigator.onLine) { await loadResearch(); if (curTab !== 'add' && curTab !== 'profile' && curTab !== 'quiz') show(curTab); } });
-  window.__fl = { mainFoods, mealById, library, S, R, save, show, weeklyExport, offLookup, parseLabel, lookupAndOpen, storeCheck, ensurePlan, addSwapToGrocery, resolveSwapQueue, swapsFor };
+  window.__fl = { mainFoods, mealById, library, S, R, save, show, weeklyExport, offLookup, parseLabel, lookupAndOpen, storeCheck, ensurePlan, addSwapToGrocery, markScannedForToCook, planDaysAhead, saveToCook, renderToCook, tonightItem, dinnerHour, resolveSwapQueue, swapsFor };
 })();
 
 /* ---------- resolve offline-queued barcodes when back online ---------- */
