@@ -1,5 +1,5 @@
 // Food Log service worker: everything the app needs is precached so it works fully offline.
-const VER="11",CACHE="foodlog-v"+VER;
+const VER="12",CACHE="foodlog-v"+VER;
 const SHELL=["./","index.html","style.css?v=1","app.js?v=1","manifest.webmanifest",
  "vendor/zxing.min.js","vendor/tesseract.min.js","vendor/worker.min.js",
  "vendor/tesseract-core/tesseract-core-lstm.wasm.js","vendor/tesseract-core/tesseract-core-simd-lstm.wasm.js","vendor/tessdata/eng.traineddata.gz",

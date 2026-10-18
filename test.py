@@ -46,7 +46,7 @@ try:
     ok('phase 1 chip on home', 'Phase 1' in pg.inner_text('#homeAlerts'))
     # wait for SW precache
     pg.evaluate("navigator.serviceWorker.ready"); pg.wait_for_function("caches.keys().then(k=>k.length>0)")
-    pg.wait_for_function("caches.open('foodlog-v11').then(c=>c.match('vendor/tessdata/eng.traineddata.gz')).then(r=>!!r)", timeout=60000)
+    pg.wait_for_function("caches.open('foodlog-v12').then(c=>c.match('vendor/tessdata/eng.traineddata.gz')).then(r=>!!r)", timeout=60000)
     ok('service worker precached OCR data', True)
     # --- real Open Food Facts lookups ---
     pg.click('#bigAdd'); pg.wait_for_selector('#s-add:not([hidden])')
@@ -254,6 +254,20 @@ try:
     ok('peanut allergy: research week has no blocked meals', pk['peanutMeals'] > 0 and not pk['bad'] and pk['af'] == 0)
     ok('peanut allergy: blocked plan meals swapped (same slot), never dropped, no same-day repeat', pk['nBlocked'] > 0 and pk['swapped'] == pk['nBlocked'] and not pk['missing'] and not pk['rep'])
     ok('renamedIds still resolve in research week', pg.evaluate("(()=>{const r=__fl.R.mealsRenamed;return Object.keys(r).length>0 && Object.values(r).every(n=>__fl.R.meals.some(m=>m.id===n))})()"))
+    # --- research grocery list respects allergies (first safe backup, like swaps) ---
+    pg.evaluate("window._kg=JSON.stringify(__fl.S.grocery);window._ka=JSON.stringify(__fl.S.profile.allergies||[]);__fl.S.grocery=[];__fl.S.profile.allergies=[...(__fl.S.profile.allergies||[]),'peanut'];__fl.save('grocery','profile');__fl.renderGrocery()")
+    pg.select_option('#resWeek', '1'); pg.click('#loadResList'); pg.wait_for_timeout(300)
+    rl = pg.evaluate('''(()=>{const fl=__fl,w=fl.R.groceryLists.weeks.find(x=>x.week==1),items=w.sections.flatMap(s=>s.items);
+      const bl=x=>(x.allergens||[]).some(a=>/peanut/.test(a))||(x.foodId&&fl.R.foodById[x.foodId]&&(fl.R.foodById[x.foodId].allergens||[]).some(a=>/peanut/.test(a)));
+      const blockedItems=items.filter(bl),g=fl.S.grocery;
+      const firstSafe=blockedItems.map(it=>[it.name,(it.backups||[]).find(b=>typeof b==='object'&&!fl.mealBlocked({name:b.name,allergens:b.allergens||[],ingredients:b.foodId?[{foodId:b.foodId}]:[]}))]);
+      return {n:g.length,raw:items.length,rawWm:items.filter(i=>i.walmartItemId).length,wm:g.filter(x=>x.walmartItemId).length,blocked:blockedItems.length,
+        leak:g.filter(x=>bl(x)||(x.foodId&&fl.R.foodById[x.foodId]&&fl.mealBlocked({name:x.name,allergens:[],ingredients:[{foodId:x.foodId}]}))).map(x=>x.name),
+        okSwap:firstSafe.every(([n,b])=>b?g.some(x=>x.name===b.name&&x.swappedFrom===n&&(!b.walmartItemId||x.walmartItemId===b.walmartItemId)):!g.some(x=>x.name===n)),swaps:firstSafe.map(([n,b])=>n+' -> '+(b&&b.name))}})()''')
+    print('RESLIST', rl)
+    ok('research list: peanut items swapped for first safe backup, none leak', rl['blocked'] > 0 and not rl['leak'] and rl['okSwap'])
+    ok('research list keeps Walmart IDs', rl['wm'] > 0 and rl['wm'] >= rl['rawWm'] - rl['blocked'])
+    pg.evaluate("__fl.S.grocery=JSON.parse(window._kg);__fl.S.profile.allergies=JSON.parse(window._ka);__fl.save('grocery','profile');__fl.renderGrocery()")
     ctx.set_offline(True); pg.wait_for_timeout(300); ok('offline: cart link explains it needs a connection', 'needs a connection' in pg.inner_text('#walmartBox')); ctx.set_offline(False); pg.wait_for_timeout(300)
     pg.click('#storeBtn'); pg.fill('#storeInput', '3017620422003'); pg.click('#storeForm button'); pg.wait_for_selector('.verdict', timeout=30000)
     ok('store mode checked off matching item', pg.evaluate("__fl.S.grocery.find(g=>g.text==='hazelnut spread').done"))

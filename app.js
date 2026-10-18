@@ -1150,14 +1150,15 @@ function renderGrocery() {
 $('#groceryForm').onsubmit = async e => { e.preventDefault(); const t = $('#groceryInput').value.trim(); if (!t) return; S.grocery.push({ id: uid(), text: t, name: t, done: false }); $('#groceryInput').value = ''; await save('grocery'); renderGrocery(); };
 $('#groceryList').onclick = async e => { setTimeout(() => checkHolds(), 0); const li = e.target.closest('li'); if (!li) return; const g = S.grocery.find(x => x.id === li.dataset.id); if (e.target.tagName === 'BUTTON') S.grocery = S.grocery.filter(x => x !== g); else if (e.target.type === 'checkbox' || e.target.classList.contains('txt')) { g.done = !g.done; g.doneAt = g.done ? Date.now() : null; } await save('grocery'); renderGrocery(); };
 $('#loadResList').onclick = async () => {
-  const w = (R.groceryLists.weeks || []).find(x => String(x.week) === $('#resWeek').value); if (!w) return; let added = 0, swapped = 0;
+  const w = (R.groceryLists.weeks || []).find(x => String(x.week) === $('#resWeek').value); if (!w) return; let added = 0, swapped = 0, skipped = 0;
   for (const sec of w.sections || []) for (const it of sec.items || []) {
     let pick = it; const blocked = x => (x.allergens || []).map(normAllergen).some(a => userAllergens().includes(a)) || (x.foodId ? foodBlocked(R.foodById[x.foodId]) : excluded(x.name));
-    if (blocked(it)) { pick = (it.backups || []).find(b => !blocked(b)); if (!pick) continue; swapped++; }
-    const text = pick.name + (pick === it && it.approxQuantity ? ' — ' + it.approxQuantity.split(';')[0] : '');
-    if (!S.grocery.some(g => g.name === pick.name && !g.done)) { S.grocery.push({ id: uid(), text, name: pick.name, backups: (it.backups || []).filter(b => b !== pick && !blocked(b)).map(b => b.name), section: sec.section, done: false, from: 'research-week-' + w.week }); added++; }
+    if (blocked(it)) { pick = (it.backups || []).find(b => typeof b === 'object' && !blocked(b)); if (!pick) { skipped++; continue; } swapped++; }
+    const text = pick.name + (pick === it && it.approxQuantity ? ' — ' + it.approxQuantity.split(';')[0] : pick.buy ? ' — ' + pick.buy : '');
+    const bk = (it.backups || []).filter(b => typeof b === 'object' && b !== pick && !blocked(b));
+    if (!S.grocery.some(g => g.name === pick.name && !g.done)) { S.grocery.push({ ...storeFields(pick), id: uid(), text, name: pick.name, foodId: pick.foodId || null, backups: bk.map(b => b.name), backupObjs: bk, section: sec.section, done: false, from: 'research-week-' + w.week, swappedFrom: pick === it ? undefined : it.name }); added++; }
   }
-  await save('grocery'); renderGrocery(); toast(`${added} items added${swapped ? ` (${swapped} swapped for your allergies)` : ''}`);
+  await save('grocery'); renderGrocery(); toast(`${added} items added${swapped ? ` (${swapped} swapped for your allergies)` : ''}${skipped ? ` · ${skipped} left off (no safe option)` : ''}`, 4000);
 };
 $('#clearChecked').onclick = async () => { const n = S.grocery.filter(g => g.done).length; if (!n) return toast('Nothing checked yet'); const snap = snapshot(); S.grocery = S.grocery.filter(g => !g.done); await save('grocery'); renderGrocery(); toastUndo(`Cleared ${n} checked item${n === 1 ? '' : 's'}`, snap); };
 $('#clearAll').onclick = async () => { if (!S.grocery.length) return toast('Your list is already empty'); if (!confirm(`Remove all ${S.grocery.length} items from your grocery list?`)) return; const snap = snapshot(); S.grocery = []; await save('grocery'); renderGrocery(); toastUndo('Grocery list cleared', snap); };
