@@ -111,12 +111,46 @@ function swapsFor({ cats, foodId, group, nova }) {
   return null;
 }
 function srcLinks(srcs) { const l = (srcs || []).filter(x => x && (x.url || x.title)); if (!l.length) return ''; return `<details class="cite"><summary>📚 ${l.length} source${l.length === 1 ? '' : 's'}</summary>${l.map(x => x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.title || x.url)}</a>${x.year ? ' (' + esc(x.year) + ')' : ''}` : esc(x.title)).join('<br>')}</details>`; }
+const SWAPSETS = []; let lastStoreItem = null;
 function swapsHTML(ctx) {
   const sw = swapsFor(ctx);
   if (!sw) return R.swaps.length || R.foods.length ? '' : `<div class="swaps placeholder"><b>🔁 Better swaps</b>Same-type alternatives will appear here once research data arrives.</div>`;
-  return `<div class="swaps"><b>🔁 Better swaps</b>${sw.kind === 'group' ? `<div class="sub">Better-rated ${esc(sw.from)} from your research list</div>` : (sw.from ? `<div class="sub">Instead of ${esc(sw.from)}</div>` : '')}
-  <ul>${sw.items.map(a => `<li><b>${esc(a.name || (a.food && a.food.name) || '')}</b>${a.food && a.food.rating ? ` <span class="tag rate-${a.food.rating}">${RATING[a.food.rating]}</span>` : ''}${a.why ? `<div>${esc(a.why)}</div>` : ''}${a.lookFor ? `<div class="look">🔎 Look for: ${esc(a.lookFor)}</div>` : ''}<div class="src">${evBadge(a)} ${srcLinks(a.sources)}</div></li>`).join('')}</ul></div>`;
+  const sid = SWAPSETS.push(sw.items) - 1, storeId = ctx.storeItemId || '';
+  return `<div class="swaps" data-sid="${sid}"><b>🔁 Better swaps</b>${sw.kind === 'group' ? `<div class="sub">Better-rated ${esc(sw.from)} from your research list</div>` : (sw.from ? `<div class="sub">Instead of ${esc(sw.from)}</div>` : '')}
+  <div class="swap-ask">Want to swap? Add one to your grocery list.</div>
+  <ul>${sw.items.map((a, i) => `<li><b>${esc(a.name || (a.food && a.food.name) || '')}</b>${a.food && a.food.rating ? ` <span class="tag rate-${a.food.rating}">${RATING[a.food.rating]}</span>` : ''}${a.why ? `<div>${esc(a.why)}</div>` : ''}${a.lookFor ? `<div class="look">🔎 Look for: ${esc(a.lookFor)}</div>` : ''}<div class="src">${evBadge(a)} ${srcLinks(a.sources)}</div>
+  <button type="button" class="btn swap-add" data-i="${i}">➕ Add to grocery list</button>${storeId ? `<button type="button" class="btn primary swap-it" data-i="${i}" data-item="${esc(storeId)}">🔁 Swap it: take this off my list, add the alternative</button>` : ''}</li>`).join('')}</ul></div>`;
 }
+const swapBlocked = x => (x.allergens || []).map(normAllergen).some(a => userAllergens().includes(a)) || (x.foodId ? foodBlocked(R.foodById[x.foodId]) : excluded(x.name));
+function swapGroceryItems(a) {
+  const meal = a.mealId && typeof mealById === 'function' ? mealById(a.mealId) : null;
+  const ings = Array.isArray(a.ingredients) && a.ingredients.length ? a.ingredients : (meal && Array.isArray(meal.ingredients) && meal.ingredients.length ? meal.ingredients : null);
+  if (!ings) return [{ name: a.name || (a.food && a.food.name), text: a.name || (a.food && a.food.name), backups: [] }];
+  const out = [];
+  for (const it of ings) {
+    let pick = it; const backs = (it.backups || []).filter(b => !swapBlocked(b));
+    if (swapBlocked(it)) { pick = backs.shift(); if (!pick) continue; }
+    out.push({ name: pick.name, text: pick.name + (pick.amount ? ' — ' + pick.amount : ''), backups: backs.filter(b => b !== pick).map(b => b.name) });
+  }
+  return out;
+}
+async function addSwapToGrocery(a, removeId) {
+  let removed = '';
+  if (removeId) { const g = S.grocery.find(x => x.id === removeId); if (g) { removed = g.text; S.grocery = S.grocery.filter(x => x !== g); } }
+  let added = 0, dup = 0;
+  for (const it of swapGroceryItems(a)) {
+    if (!it.name) continue;
+    if (S.grocery.some(g => !g.done && (g.name || g.text).toLowerCase() === it.name.toLowerCase())) { dup++; continue; }
+    S.grocery.push({ id: uid(), text: it.text, name: it.name, backups: it.backups, done: false, from: 'swap' }); added++;
+  }
+  await save('grocery'); renderGrocery();
+  toast((removed ? `Removed "${removed}". ` : '') + (added ? `Added ${added} item${added === 1 ? '' : 's'} to your grocery list` : 'Already on your grocery list') + (added && dup ? ` (${dup} already there)` : ''));
+}
+document.addEventListener('click', e => {
+  const b = e.target.closest('.swap-add, .swap-it'); if (!b) return; e.preventDefault();
+  const items = SWAPSETS[+b.closest('.swaps').dataset.sid]; const a = items && items[+b.dataset.i]; if (!a) return;
+  addSwapToGrocery(a, b.classList.contains('swap-it') ? b.dataset.item : null).then(() => { if (b.classList.contains('swap-it')) b.closest('.swaps').querySelectorAll('.swap-it').forEach(x => x.remove()); });
+});
 
 /* ---------- navigation ---------- */
 const TITLES = { today: 'Food Log', add: 'Add food', progress: 'Progress', guide: 'Mediterranean guide', plan: 'Meal plan & prep', grocery: 'Grocery list', profile: 'Your profile', quiz: 'Questionnaire' };
@@ -777,7 +811,7 @@ $('#planToGrocery').onclick = async () => {
 function renderGrocery() {
   const GL = R.groceryLists, weeks = GL && Array.isArray(GL.weeks) ? GL.weeks : [];
   $('#resListRow').hidden = !weeks.length; if (weeks.length && !$('#resWeek').options.length) $('#resWeek').innerHTML = weeks.map(w => `<option value="${w.week}">Week ${w.week}</option>`).join('');
-  $('#groceryList').innerHTML = S.grocery.map(g => `<li class="${g.done ? 'done' : ''}" data-id="${g.id}"><input type="checkbox"${g.done ? ' checked' : ''} aria-label="Got it"><span class="txt">${esc(g.text)}</span><button aria-label="Remove">✕</button></li>`).join('');
+  $('#groceryList').innerHTML = S.grocery.map(g => `<li class="${g.done ? 'done' : ''}" data-id="${g.id}"><input type="checkbox"${g.done ? ' checked' : ''} aria-label="Got it"><span class="txt">${esc(g.text)}${g.backups && g.backups.length ? `<span class="backup">If out: ${g.backups.map(esc).join(' or ')}</span>` : ''}</span><button aria-label="Remove">✕</button></li>`).join('');
   $('#groceryEmpty').hidden = S.grocery.length > 0;
 }
 $('#groceryForm').onsubmit = async e => { e.preventDefault(); const t = $('#groceryInput').value.trim(); if (!t) return; S.grocery.push({ id: uid(), text: t, name: t, done: false }); $('#groceryInput').value = ''; await save('grocery'); renderGrocery(); };
@@ -788,7 +822,7 @@ $('#loadResList').onclick = async () => {
     let pick = it; const blocked = x => (x.allergens || []).map(normAllergen).some(a => userAllergens().includes(a)) || (x.foodId ? foodBlocked(R.foodById[x.foodId]) : excluded(x.name));
     if (blocked(it)) { pick = (it.backups || []).find(b => !blocked(b)); if (!pick) continue; swapped++; }
     const text = pick.name + (pick === it && it.approxQuantity ? ' — ' + it.approxQuantity.split(';')[0] : '');
-    if (!S.grocery.some(g => g.name === pick.name && !g.done)) { S.grocery.push({ id: uid(), text, name: pick.name, section: sec.section, done: false, from: 'research-week-' + w.week }); added++; }
+    if (!S.grocery.some(g => g.name === pick.name && !g.done)) { S.grocery.push({ id: uid(), text, name: pick.name, backups: (it.backups || []).filter(b => b !== pick && !blocked(b)).map(b => b.name), section: sec.section, done: false, from: 'research-week-' + w.week }); added++; }
   }
   await save('grocery'); renderGrocery(); toast(`${added} items added${swapped ? ` (${swapped} swapped for your allergies)` : ''}`);
 };
@@ -822,7 +856,7 @@ async function storeCheck(code) {
     ${ratedBy && rating ? `<div class="src">${srcLinks(ratedBy.sources)}</div>` : ''}
     ${p.per100 ? `<div class="nut"><div><b>${n.kcal ?? '–'}</b>kcal</div><div><b>${n.sugar ?? '–'}g</b>sugar</div><div><b>${n.fiber ?? '–'}g</b>fiber</div><div><b>${n.sodium ?? '–'}mg</b>sodium</div><div><b>${n.fat ?? '–'}g</b>fat</div><div><b>${n.satfat ?? '–'}g</b>sat fat</div><div><b>${n.protein ?? '–'}g</b>protein</div><div><b>${n.carbs ?? '–'}g</b>carbs</div></div><div class="sub" style="text-align:center">per 100 g · Open Food Facts</div>` : '<div class="sub">No nutrition data on Open Food Facts.</div>'}
     ${item ? `<div class="status ok">✓ Checked off "${esc(item.text)}"</div>` : ''}${!m.food ? '<div class="sub">Added to research queue.</div>' : ''}
-    ${swapsHTML({ cats: p.categories, foodId: m.food && m.food.id, group: m.group, nova: p.nova })}</div>`;
+    ${swapsHTML({ cats: p.categories, foodId: m.food && m.food.id, group: m.group, nova: p.nova, storeItemId: item && item.id })}</div>`;
 }
 
 /* ---------- settings ---------- */
@@ -844,7 +878,7 @@ $('#installBtn').onclick = async () => { if (deferredPrompt) { deferredPrompt.pr
   if (!S.profile) { fillProfile(); show('profile'); } else show('today');
   resolvePending();
   document.addEventListener('visibilitychange', async () => { if (document.visibilityState === 'visible' && navigator.onLine) { await loadResearch(); if (curTab !== 'add' && curTab !== 'profile' && curTab !== 'quiz') show(curTab); } });
-  window.__fl = { mainFoods, mealById, library, S, R, save, show, weeklyExport, offLookup, parseLabel, lookupAndOpen, storeCheck, ensurePlan };
+  window.__fl = { mainFoods, mealById, library, S, R, save, show, weeklyExport, offLookup, parseLabel, lookupAndOpen, storeCheck, ensurePlan, addSwapToGrocery };
 })();
 
 /* ---------- resolve offline-queued barcodes when back online ---------- */

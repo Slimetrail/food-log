@@ -38,7 +38,7 @@ try:
     ok('phase 1 chip on home', 'Phase 1' in pg.inner_text('#homeAlerts'))
     # wait for SW precache
     pg.evaluate("navigator.serviceWorker.ready"); pg.wait_for_function("caches.keys().then(k=>k.length>0)")
-    pg.wait_for_function("caches.open('foodlog-v1').then(c=>c.match('vendor/tessdata/eng.traineddata.gz')).then(r=>!!r)", timeout=60000)
+    pg.wait_for_function("caches.open('foodlog-v2').then(c=>c.match('vendor/tessdata/eng.traineddata.gz')).then(r=>!!r)", timeout=60000)
     ok('service worker precached OCR data', True)
     # --- real Open Food Facts lookups ---
     pg.click('#bigAdd'); pg.wait_for_selector('#s-add:not([hidden])')
@@ -58,6 +58,10 @@ try:
     for code, qty in [('5449000000996', None), ('8076809513753', None)]:
       pg.click('#bigAdd'); pg.fill('#barcodeInput', code); pg.click('#barcodeForm button'); pg.wait_for_selector('#foodForm:not([hidden])', timeout=30000); pg.wait_for_timeout(400)
       if pg.input_value('#ffBasis') == '100g': pg.fill('#ffQty', '85')
+      if code == '5449000000996':
+        ok('Add food swaps have Add to grocery list buttons', pg.locator('#foodForm .swaps .swap-add').count() >= 1 and pg.locator('#foodForm .swap-it').count() == 0)
+        ok('scan (Coca-Cola, NOVA 4) shows Better swaps', pg.is_visible('#foodForm .swaps') and pg.is_visible('#ffUpf')); print('SWAPS14', pg.inner_text('#foodForm .swaps') if pg.is_visible('#foodForm .swaps') else None)
+        pg.evaluate("document.querySelector('#foodForm .swaps').scrollIntoView({block:'start'});scrollBy(0,-90)"); shot(pg, '14-scan-result-swaps')
       print('OFF', code, '->', pg.input_value('#ffName'), pg.input_value('#ff_kcal'), pg.input_value('#ffBasis'), 'nova', pg.input_value('#ffNova'))
       pg.evaluate("document.querySelector('#ffWhen').value=(()=>{const d=new Date(Date.now()-(5+Math.random())*3600e3);d.setMinutes(d.getMinutes()-d.getTimezoneOffset());return d.toISOString().slice(0,16)})()")
       pg.click('#ffSave'); pg.wait_for_selector('#s-today:not([hidden])')
@@ -85,6 +89,9 @@ try:
     ok('OCR read calories 230 from test label', vals['kcal'] == '230')
     pg.fill('#ffName', 'TEST label (not saved)'); pg.evaluate("document.querySelector('#m-label').scrollIntoView()"); shot(pg, '06-label-photo-ocr')
     pg.evaluate("document.querySelector('#foodForm').scrollIntoView()"); shot(pg, '06b-label-ocr-confirm-form')
+    pg.evaluate("(()=>{const g=document.querySelector('#ffGroup'),n=document.querySelector('#ffNova');g.closest('details')&&(g.closest('details').open=true);g.value='whole-grains';n.value='4';g.dispatchEvent(new Event('change'))})()"); pg.wait_for_timeout(300)
+    ok('label photo shows Better swaps', pg.is_visible('#foodForm .swaps')); print('SWAPS15', pg.inner_text('#foodForm .swaps') if pg.is_visible('#foodForm .swaps') else None)
+    pg.evaluate("document.querySelector('#foodForm .swaps').scrollIntoView({block:'start'});scrollBy(0,-90)"); shot(pg, '15-photo-label-swaps')
     pg.click('#ffCancel')
     # eating out screen + quick re-log
     pg.click('.seg-btn[data-mode=out]'); pg.evaluate('scrollTo(0,0)'); shot(pg, '07-add-quick-relog-eating-out')
@@ -101,11 +108,27 @@ try:
     pg.evaluate('scrollTo(0,0)'); shot(pg, '08-meal-planner')
     pg.evaluate("document.querySelector('#prepCard').scrollIntoView()"); shot(pg, '08b-meal-prep')
     pg.click('#planToGrocery'); pg.wait_for_selector('#s-grocery:not([hidden])')
-    pg.fill('#groceryInput', 'hazelnut spread'); pg.click('#groceryForm button')
+    pg.fill('#groceryInput', 'hazelnut spread'); pg.click('#groceryForm button'); pg.fill('#groceryInput', 'cola'); pg.click('#groceryForm button')
     shot(pg, '09-grocery-list')
     pg.click('#storeBtn'); pg.fill('#storeInput', '3017620422003'); pg.click('#storeForm button'); pg.wait_for_selector('.verdict', timeout=30000)
     ok('store mode checked off matching item', pg.evaluate("__fl.S.grocery.find(g=>g.text==='hazelnut spread').done"))
     pg.evaluate("document.querySelector('#storeForm').scrollIntoView()"); shot(pg, '10-store-mode-verdict')
+    pg.fill('#storeInput', '5449000000996'); pg.click('#storeForm button'); pg.wait_for_function("document.querySelector('.verdict') && document.querySelector('.verdict').textContent.includes('Coca')", timeout=30000)
+    ok('store mode shows Better swaps', pg.is_visible('.verdict .swaps')); print('SWAPS16', pg.inner_text('.verdict .swaps') if pg.is_visible('.verdict .swaps') else None)
+    pg.evaluate("document.querySelector('.verdict').scrollIntoView({block:'start'});scrollBy(0,-90)"); shot(pg, '16-store-mode-swaps')
+    n0 = pg.evaluate('__fl.S.grocery.length'); pg.click('.verdict .swaps .swap-add >> nth=0'); pg.wait_for_timeout(300)
+    ok('swap: Add to grocery list adds alternative', pg.evaluate("__fl.S.grocery.some(g=>g.from==='swap'&&/sparkling/i.test(g.name))") and pg.evaluate('__fl.S.grocery.length') == n0 + 1)
+    pg.click('.verdict .swaps .swap-add >> nth=0'); pg.wait_for_timeout(300)
+    ok('swap: duplicate not added, toast says so', pg.evaluate('__fl.S.grocery.length') == n0 + 1 and 'Already' in pg.inner_text('#toast'))
+    ok('store mode offers Swap it for matched list item', pg.is_visible('.verdict .swap-it'))
+    pg.click('.verdict .swaps .swap-it >> nth=1'); pg.wait_for_timeout(300)
+    ok('Swap it removed list item and added alternative', not pg.evaluate("__fl.S.grocery.some(g=>g.text==='cola')") and pg.evaluate("__fl.S.grocery.some(g=>/water/i.test(g.name)&&!/sparkling/i.test(g.name))"))
+    shot(pg, '16b-store-swap-added')
+    # TEST-only swap with ingredients (names only, no nutrition): allergy-blocked ingredient falls back to backup
+    pg.evaluate("""__fl.addSwapToGrocery({name:'TEST bowl', ingredients:[{name:'TEST chickpeas',amount:'1 can',backups:[{name:'TEST white beans'}]},{name:'TEST tahini',amount:'2 tbsp',allergens:['sesame'],backups:[{name:'TEST olive oil'}]}]})"""); pg.wait_for_timeout(300)
+    g = pg.evaluate('__fl.S.grocery'); ok('swap ingredients added with backups, allergy item replaced by backup', any(x['name']=='TEST chickpeas' and x['backups']==['TEST white beans'] for x in g) and any(x['name']=='TEST olive oil' for x in g) and not any('tahini' in x['name'] for x in g))
+    ok('backup shown on grocery list', 'If out: TEST white beans' in pg.inner_text('#groceryList'))
+    pg.evaluate("__fl.S.grocery=__fl.S.grocery.filter(x=>!x.name.startsWith('TEST'));__fl.save('grocery')")
     pg.click('#storeClose')
     pg.click('.tabs [data-tab=progress]'); pg.wait_for_timeout(300)
     if pg.is_visible('#stepPick button'):
