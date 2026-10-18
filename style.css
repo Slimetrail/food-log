@@ -256,3 +256,8 @@ details.cite[open]{display:block;width:100%;background:#f6f8f4;border-radius:8px
 .cook-day{margin:12px 0 0;font-weight:700;color:#365314}.cook-item .slot{display:inline-block;font-size:13px;text-transform:capitalize;background:#eef4ea;border-radius:8px;padding:1px 8px;margin-right:4px}
 .ask-made,.roll{display:grid;gap:8px;background:#fff7e6;border:1px solid #f1d9a6;border-radius:14px;padding:12px;margin-bottom:12px}.ask-made .nm{font-size:17px}
 .st-used{color:#b45309!important;font-weight:600}.st-pantry{color:#6b7280}
+.meal-sug{margin-top:10px;padding:10px;border:1px dashed #9cc3a3;border-radius:12px;background:#fff}.sug-row{display:grid;gap:6px;margin-top:8px}
+.cook-ings.check label.have{display:flex;gap:12px;align-items:flex-start;min-height:44px}.cook-ings.check input{width:26px;height:26px;flex:none;margin-top:2px}.cook-ings.check .nm{flex:1}.cook-ings.check .st{float:none;display:block}
+.missing{display:grid;gap:8px;background:#fff7e6;border:1px solid #f1d9a6;border-radius:14px;padding:12px;margin-top:10px}
+.for-meal{display:block;font-size:14px;color:#7c3aed}.cook-day.hold{color:#b45309}.cook-item.held{background:#fffaf0}
+.st-have{color:#2e7d32;font-weight:600}

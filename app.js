@@ -139,6 +139,39 @@ function renderWalmart() {
 }
 window.addEventListener('online', () => renderWalmart()); window.addEventListener('offline', () => renderWalmart());
 document.addEventListener('click', e => { const w = e.target.closest('#walmartCart.disabled'); if (w) { e.preventDefault(); toast('The Walmart cart link needs a connection. Try again when you\u2019re online.'); } });
+function mealsWithFood(foodId) {
+  if (!foodId) return []; const wk = weekKey(new Date()), wd = weekPlanDays();
+  const planned = new Set([...S.toCook.filter(t => !t.week || t.week === wk).map(t => t.mealId), ...wd.flatMap(d => Object.values(d.meals))]);
+  return R.meals.filter(m => hasSrc(m) && (m.ingredients || []).some(i => i.foodId === foodId) && !mealBlocked(m) && !planned.has(m.id)).slice(0, 4);
+}
+function mealSuggestHTML(a) {
+  const ms = mealsWithFood(a.foodId); const nm = (a.food && a.food.name) || a.name;
+  if (!ms.length) return `<div class="meal-sug"><b>🍽️ Meals you can make with this</b><div class="sub">No other research meals use ${esc(nm)} that aren't already planned this week.</div></div>`;
+  return `<div class="meal-sug"><b>🍽️ Meals you can make with this</b><div class="sub">Research meals using ${esc(nm)}</div>${ms.map(m => `<div class="sug-row"><span>${esc(m.name)}${m.nutritionApprox && m.nutritionApprox.kcal != null ? ` <span class="sub">· ~${esc(m.nutritionApprox.kcal)} kcal</span>` : ''}</span><button type="button" class="btn big" data-addmeal="${esc(m.id)}">➕ Add this meal</button></div>`).join('')}</div>`;
+}
+async function addMealThisWeek(id) {
+  const m = mealById(id) || R.meals.find(x => x.id === id); if (!m) return;
+  const wk = weekKey(new Date());
+  if (S.toCook.some(t => t.mealId === id && t.week === wk && !t.plannedDay)) return toast('Already in To cook');
+  await saveToCook({ mealId: id, name: m.name }, 'week'); const t = S.toCook[S.toCook.length - 1]; t.week = wk; const n = listIngredients(t);
+  await save('toCook', 'grocery'); renderGrocery(); toast(`🍳 ${m.name} added to To cook · ${n} item${n === 1 ? '' : 's'} added to your list`, 3500);
+}
+/* ---------- hold / checklist ---------- */
+const haveIt = i => i.have != null ? i.have : ['bought', 'pantry'].includes(boughtState(i));
+async function holdMeal(t) {
+  const miss = t.ingredients.filter(i => !haveIt(i)); t.onHold = true; t.missing = miss.map(i => i.name); let n = 0;
+  for (const i of miss) { i.have = null; i.used = i.used || false;
+    const open = groceryFor(i.name).find(x => !x.done);
+    if (open) { open.forMeals = [...new Set([...(open.forMeals || []), t.name])]; continue; }
+    const x = { id: uid(), name: i.name, amtPer: i.amount ?? null, unit: i.unit || '', servings: 1, backups: i.backups || [], backupObjs: i.backupObjs || [], walmartItemId: i.walmartItemId || null, forMeals: [t.name], done: false, from: 'hold' }; x.text = gText(x); S.grocery.push(x); n++; }
+  await save('toCook', 'grocery'); return n;
+}
+async function checkHolds() {
+  let back = [];
+  for (const t of S.toCook) if (t.onHold) { const miss = t.ingredients.filter(i => (t.missing || []).includes(i.name)); if (miss.every(i => boughtState(i) === 'bought')) { t.onHold = false; t.missing = []; miss.forEach(i => { i.have = true; i.used = false; }); back.push(t.name); } }
+  if (back.length) { await save('toCook'); toast(`🎉 You have everything for ${back.join(', ')} now`, 4000); }
+  return back;
+}
 const SWAPSETS = []; let lastScanned = null;
 function dinnerDayOptions() {
   const days = planDaysAhead().slice(0, 7); if (!days.length) return `<option value="${dayKey(new Date())}">Today</option>`;
@@ -250,24 +283,28 @@ function renderToCook() {
   const tn = tonightItem();
   $('#tonightCard').hidden = !tn;
   if (tn) $('#tonightCard').innerHTML = `<button class="tonight-btn" data-cook="${tn.id}">🌙 Tonight: you bought ingredients for <b>${esc(tn.name)}</b><span class="sub">Tap to see the steps</span></button>`;
-  const wk = weekKey(new Date()), old = S.toCook.filter(t => t.week && t.week < wk), ask = dueToAsk();
+  const wk = weekKey(new Date()); let carried = false; S.toCook.forEach(t => { if (t.onHold && t.week && t.week < wk) { t.week = wk; if (t.plannedDay && t.plannedDay < dayKey(new Date())) t.plannedDay = null; carried = true; } }); if (carried) save('toCook');
+  const old = S.toCook.filter(t => t.week && t.week < wk && !t.onHold), ask = dueToAsk();
   const pre = (old.length ? `<div class="roll"><b>New week</b><div class="sub">${old.length} meal${old.length === 1 ? '' : 's'} from last week not made yet.</div><button class="btn primary big" data-roll="move">Move to this week</button><button class="btn big" data-roll="clear">Clear them</button></div>` : '') + (ask ? askHTML(ask) : '');
   if (!S.toCook.length) { el.hidden = !pre; el.innerHTML = pre; return; }
   el.hidden = false; const tk = dayKey(new Date());
-  const list = [...S.toCook].sort((a, b) => { const ka = a.plannedDay === tk ? '0' : (a.plannedDay || '9'), kb = b.plannedDay === tk ? '0' : (b.plannedDay || '9'); return ka.localeCompare(kb) || SLOTS.indexOf(a.slot) - SLOTS.indexOf(b.slot); });
+  const held = S.toCook.filter(t => t.onHold); const list = S.toCook.filter(t => !t.onHold).sort((a, b) => { const ka = a.plannedDay === tk ? '0' : (a.plannedDay || '9'), kb = b.plannedDay === tk ? '0' : (b.plannedDay || '9'); return ka.localeCompare(kb) || SLOTS.indexOf(a.slot) - SLOTS.indexOf(b.slot); });
   const groups = []; for (const t of list) { const g = t.plannedDay === tk ? 'Today' : t.plannedDay ? fmtDay(fromKey(t.plannedDay)).split(',')[0] + ' · ' + fmtDay(fromKey(t.plannedDay)).split(',')[1] : 'Any day'; let G = groups.find(x => x.g === g); if (!G) groups.push(G = { g, items: [] }); G.items.push(t); }
   el.innerHTML = pre + `<b>🍳 To cook</b><div class="sub">Pick any meal, any day.</div>${groups.map(G => `<div class="cook-day">${esc(G.g)}</div><ul class="cook-list">${G.items.map(t => { const n = t.ingredients.length, b = t.ingredients.filter(i => ['bought', 'pantry'].includes(boughtState(i))).length, u = t.ingredients.filter(i => boughtState(i) === 'used').length;
-    return `<li><button class="cook-item" data-cook="${t.id}"><span class="nm">${t.slot ? `<span class="slot">${esc(t.slot)}</span> ` : ''}${esc(t.name)}</span><span class="sub">${n ? `${b} of ${n} ingredients ready${u ? ` · ${u} used — need more` : ''}` : 'No ingredient list'}</span></button></li>`; }).join('')}</ul>`).join('')}`;
+    return `<li><button class="cook-item" data-cook="${t.id}"><span class="nm">${t.slot ? `<span class="slot">${esc(t.slot)}</span> ` : ''}${esc(t.name)}</span><span class="sub">${n ? `${b} of ${n} ingredients ready${u ? ` · ${u} used — need more` : ''}` : 'No ingredient list'}</span></button></li>`; }).join('')}</ul>`).join('')}${held.length ? `<div class="cook-day hold">⏸ On hold (waiting on ingredients)</div><ul class="cook-list">${held.map(t => `<li><button class="cook-item held" data-cook="${t.id}"><span class="nm">${t.slot ? `<span class="slot">${esc(t.slot)}</span> ` : ''}${esc(t.name)}</span><span class="sub">Waiting on: ${(t.missing || []).map(esc).join(', ')}</span></button></li>`).join('')}</ul>` : ''}`;
 }
+function missingHTML(t) { const n = t.ingredients.filter(i => !haveIt(i)).length; if (!n) return `<div class="status ok">✓ You have everything${t.onHold ? '' : ''}.</div>`;
+  return `<div class="missing"><b>Missing ${n} ingredient${n === 1 ? '' : 's'}</b><button class="btn primary big" id="cookHold" data-id="${t.id}">⏸ Put on hold & add missing to grocery list</button></div>`; }
 function openCook(id) {
   const t = S.toCook.find(x => x.id === id); if (!t) return;
   const meal = t.mealId && mealById(t.mealId), nut = meal && meal.nutritionApprox;
   $('#cookBody').innerHTML = `<h2>${esc(t.name)}</h2>
-    <h3>Ingredients</h3><ul class="cook-ings">${t.ingredients.map(i => { const st = boughtState(i);
-      return `<li class="${st === 'bought' ? 'got' : ''}"><span>${esc(i.name)}${i.amount != null ? ' — ' + esc(r1(i.amount)) + (i.unit ? ' ' + esc(i.unit) : '') : ''}</span><span class="st st-${st}">${STATE_TXT[st]}</span>${i.gotBackup ? `<div class="sub">✓ Got backup: ${esc(i.gotBackup)}${i.boughtProduct ? ' (' + esc(i.boughtProduct) + ')' : ''}</div>` : ''}${i.substitutedFor ? `<div class="sub">Backup used instead of ${esc(i.substitutedFor)} (your allergy list)</div>` : ''}${i.backups.length ? `<div class="sub">If out: ${i.backups.map(esc).join(' or ')}</div>` : ''}${availHTML(i, i.backupObjs)}</li>`; }).join('') || '<li class="sub">No ingredient list from research.</li>'}</ul>
+    <h3>Check what you have</h3><ul class="cook-ings check">${t.ingredients.map((i, k) => { const st = boughtState(i);
+      return `<li><label class="have"><input type="checkbox" data-have="${k}" data-id="${t.id}"${haveIt(i) ? ' checked' : ''}><span class="nm">${esc(i.name)}${i.amount != null ? ' — ' + esc(r1(i.amount)) + (i.unit ? ' ' + esc(i.unit) : '') : ''}<span class="st st-${i.have === true && st !== 'bought' ? 'have' : st}">${i.have === true && st !== 'bought' ? '✓ you have it' : STATE_TXT[st]}</span></span></label>${i.gotBackup ? `<div class="sub">✓ Got backup: ${esc(i.gotBackup)}${i.boughtProduct ? ' (' + esc(i.boughtProduct) + ')' : ''}</div>` : ''}${i.substitutedFor ? `<div class="sub">Backup used instead of ${esc(i.substitutedFor)} (your allergy list)</div>` : ''}${i.backups.length ? `<div class="sub">If out: ${i.backups.map(esc).join(' or ')}</div>` : ''}${availHTML(i, i.backupObjs)}</li>`; }).join('') || '<li class="sub">No ingredient list from research.</li>'}</ul>
+    <div id="cookMissing">${missingHTML(t)}</div>
     <h3>Steps</h3>${t.steps.length ? `<ol class="cook-steps">${t.steps.map(x => `<li>${esc(x)}</li>`).join('')}</ol>` : '<div class="sub">Research has no steps for this one yet.</div>'}
     ${nut && nut.kcal != null ? `<div class="sub">About ${esc(nut.kcal)} kcal per serving · research nutrition${meal.evidence ? ' · ' + esc(meal.evidence) + ' evidence' : ''}</div>${srcLinks(meal.sources)}` : ''}
-    <div class="cook-actions"><button class="btn primary big" id="cookDone" data-id="${t.id}">✅ Mark as cooked</button><button class="btn big" id="cookRemove" data-id="${t.id}">Remove</button><button class="btn big" id="cookClose" data-id="${t.id}">Close</button></div>`;
+    <div class="cook-actions"><button class="btn primary big" id="cookDone" data-id="${t.id}">✅ Yes, I made it</button><button class="btn big" id="cookRemove" data-id="${t.id}">Remove</button><button class="btn big" id="cookClose" data-id="${t.id}">Close</button></div>`;
   const d = $('#cookView'); if (!d.open) d.showModal(); document.activeElement && document.activeElement.blur(); d.scrollTop = 0; setTimeout(() => { d.scrollTop = 0; }, 50);
 }
 function askHTML(t) { return `<div class="ask-made"><b>Did you make it?</b><div class="nm">${esc(t.name)}${t.plannedDay ? ` <span class="sub">${esc(fmtDay(fromKey(t.plannedDay)).split(',')[0])}${t.slot ? ' · ' + esc(t.slot) : ''}</span>` : ''}</div>
@@ -311,6 +348,9 @@ async function markCooked(id) {
   $('#cookView').close(); toast(nut ? `Logged ${t.name} (${nut.kcal} kcal, research nutrition)` : `Logged ${t.name}. Research has no nutrition for it, so add values if you know them.`, 3500); show('today');
 }
 document.addEventListener('click', async e => {
+  const hv = e.target.closest('[data-have]'); if (hv) { const t = S.toCook.find(x => x.id === hv.dataset.id); if (t) { t.ingredients[+hv.dataset.have].have = hv.checked; await save('toCook'); $('#cookMissing').innerHTML = missingHTML(t); } return; }
+  if (e.target.id === 'cookHold') { const t = S.toCook.find(x => x.id === e.target.dataset.id); if (t) { const n = await holdMeal(t); $('#cookView').close(); toast(`⏸ ${t.name} on hold · ${n} missing item${n === 1 ? '' : 's'} added to your list`, 3500); renderToCook(); } return; }
+  const am = e.target.closest('[data-addmeal]'); if (am) { e.preventDefault(); await addMealThisWeek(am.dataset.addmeal); am.disabled = true; am.textContent = '✓ Added'; return; }
   const ap = e.target.closest('[data-approve]'); if (ap) { e.preventDefault(); await approveWeek(); if (curTab === 'plan') renderPlan(); return; }
   const c = e.target.closest('[data-cook]'); if (c) { e.preventDefault(); return openCook(c.dataset.cook); }
   if (e.target.id === 'cookDone') return markCooked(e.target.dataset.id);
@@ -344,7 +384,8 @@ document.addEventListener('click', e => {
   const b = e.target.closest('.swap-add, .swap-it'); if (!b) return; e.preventDefault();
   const items = SWAPSETS[+b.closest('.swaps').dataset.sid]; const a = items && items[+b.dataset.i]; if (!a) return;
   const li = b.closest('li'), sel = li && li.querySelector('.swap-day select'), inStore = !!b.closest('.verdict');
-  addSwapToGrocery(a, b.classList.contains('swap-it') ? b.dataset.item : null, inStore && isHomemade(a) ? { dinnerDay: sel ? sel.value : (planDaysAhead().find(d => !d.meals.dinner) || {}).date || dayKey(new Date()), scanned: lastScanned } : {}).then(() => { if (b.classList.contains('swap-it')) b.closest('.swaps').querySelectorAll('.swap-it').forEach(x => x.remove()); });
+  const showSug = () => { if (!inStore || !li) return; li.querySelector('.meal-sug')?.remove(); li.insertAdjacentHTML('beforeend', mealSuggestHTML(a)); };
+  addSwapToGrocery(a, b.classList.contains('swap-it') ? b.dataset.item : null, inStore && isHomemade(a) ? { dinnerDay: sel ? sel.value : (planDaysAhead().find(d => !d.meals.dinner) || {}).date || dayKey(new Date()), scanned: lastScanned } : {}).then(() => { showSug(); if (b.classList.contains('swap-it')) b.closest('.swaps').querySelectorAll('.swap-it').forEach(x => x.remove()); });
 });
 
 /* ---------- navigation ---------- */
@@ -1025,11 +1066,11 @@ function renderGrocery() {
   const ms = myStore(), sl = $('#myStoreLine'); if (sl) { sl.hidden = !ms; if (ms) sl.textContent = `🏪 ${ms.chain}${ms.city ? ', ' + ms.city : ''}${ms.state ? ', ' + ms.state : ''}${ms.inStoreOnly ? ' · in-store only' : ''}`; }
   const GL = R.groceryLists, weeks = GL && Array.isArray(GL.weeks) ? GL.weeks : [];
   $('#resListRow').hidden = !weeks.length; if (weeks.length && !$('#resWeek').options.length) $('#resWeek').innerHTML = weeks.map(w => `<option value="${w.week}">Week ${w.week}</option>`).join('');
-  $('#groceryList').innerHTML = S.grocery.map(g => `<li class="${g.done ? 'done' : ''}" data-id="${g.id}"><input type="checkbox"${g.done ? ' checked' : ''} aria-label="Got it"><span class="txt">${esc(g.text)}${g.backups && g.backups.length ? `<span class="backup">If out: ${g.backups.map(esc).join(' or ')}</span>` : ''}${availHTML(g, g.backupObjs)}${isWalmart() ? `<a class="find-wm" href="${esc(walmartFindUrl(g))}" target="_blank" rel="noopener">🔎 Find at Walmart</a>` : ''}</span><button aria-label="Remove">✕</button></li>`).join('');
+  $('#groceryList').innerHTML = S.grocery.map(g => `<li class="${g.done ? 'done' : ''}" data-id="${g.id}"><input type="checkbox"${g.done ? ' checked' : ''} aria-label="Got it"><span class="txt">${esc(g.text)}${g.backups && g.backups.length ? `<span class="backup">If out: ${g.backups.map(esc).join(' or ')}</span>` : ''}${availHTML(g, g.backupObjs)}${g.forMeals && g.forMeals.length ? `<span class="for-meal">For: ${g.forMeals.map(esc).join(', ')}</span>` : ''}${isWalmart() ? `<a class="find-wm" href="${esc(walmartFindUrl(g))}" target="_blank" rel="noopener">🔎 Find at Walmart</a>` : ''}</span><button aria-label="Remove">✕</button></li>`).join('');
   $('#groceryEmpty').hidden = S.grocery.length > 0; renderWalmart();
 }
 $('#groceryForm').onsubmit = async e => { e.preventDefault(); const t = $('#groceryInput').value.trim(); if (!t) return; S.grocery.push({ id: uid(), text: t, name: t, done: false }); $('#groceryInput').value = ''; await save('grocery'); renderGrocery(); };
-$('#groceryList').onclick = async e => { const li = e.target.closest('li'); if (!li) return; const g = S.grocery.find(x => x.id === li.dataset.id); if (e.target.tagName === 'BUTTON') S.grocery = S.grocery.filter(x => x !== g); else if (e.target.type === 'checkbox' || e.target.classList.contains('txt')) g.done = !g.done; await save('grocery'); renderGrocery(); };
+$('#groceryList').onclick = async e => { setTimeout(() => checkHolds(), 0); const li = e.target.closest('li'); if (!li) return; const g = S.grocery.find(x => x.id === li.dataset.id); if (e.target.tagName === 'BUTTON') S.grocery = S.grocery.filter(x => x !== g); else if (e.target.type === 'checkbox' || e.target.classList.contains('txt')) g.done = !g.done; await save('grocery'); renderGrocery(); };
 $('#loadResList').onclick = async () => {
   const w = (R.groceryLists.weeks || []).find(x => String(x.week) === $('#resWeek').value); if (!w) return; let added = 0, swapped = 0;
   for (const sec of w.sections || []) for (const it of sec.items || []) {
@@ -1061,6 +1102,7 @@ async function storeCheck(code) {
   if (!p.found) { v.innerHTML = `<div class="verdict mid"><h3>Not in Open Food Facts</h3><div class="sub">Barcode ${esc(code)}. Check the label yourself.</div></div>`; return; }
   const m = mapProduct(p.categories, p.name), rating = ratingFor(m.food && m.food.id, m.group), n = p.per100 || {};
   const cookHits = await markScannedForToCook(p);
+  setTimeout(() => checkHolds(), 0);
   const item = matchGrocery(p, m.food); if (item) { item.done = true; await save('grocery'); renderGrocery(); }
   await queueProduct(p); lastScanned = p;
   const hits = productAllergyHits(p.allergens);
@@ -1093,7 +1135,7 @@ $('#installBtn').onclick = async () => { if (deferredPrompt) { deferredPrompt.pr
   if (!S.profile) { fillProfile(); show('profile'); } else show('today');
   resolvePending();
   document.addEventListener('visibilitychange', async () => { if (document.visibilityState === 'visible' && navigator.onLine) { await loadResearch(); if (curTab !== 'add' && curTab !== 'profile' && curTab !== 'quiz') show(curTab); } });
-  window.__fl = { mainFoods, mealById, library, S, R, save, show, weeklyExport, offLookup, parseLabel, lookupAndOpen, storeCheck, ensurePlan, addSwapToGrocery, approveWeek, weekKey, boughtState, markCooked, walmartCartUrl, renderGrocery, storeKey, availHTML, exportProfile, markScannedForToCook, planDaysAhead, saveToCook, renderToCook, tonightItem, dinnerHour, resolveSwapQueue, swapsFor };
+  window.__fl = { mainFoods, mealById, library, S, R, save, show, weeklyExport, offLookup, parseLabel, lookupAndOpen, storeCheck, ensurePlan, addSwapToGrocery, checkHolds, addMealThisWeek, approveWeek, weekKey, boughtState, markCooked, walmartCartUrl, renderGrocery, storeKey, availHTML, exportProfile, markScannedForToCook, planDaysAhead, saveToCook, renderToCook, tonightItem, dinnerHour, resolveSwapQueue, swapsFor };
 })();
 
 /* ---------- resolve offline-queued barcodes when back online ---------- */
