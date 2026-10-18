@@ -188,7 +188,40 @@ async function saveToCook(a, source, plannedDay, slot) {
   S.toCook.push({ id: uid(), mealId, name, ingredients: ings, steps, addedAt: new Date().toISOString(), plannedDay: plannedDay || null, slot: slot || null, source });
   await save('toCook'); return true;
 }
-const boughtState = ing => { if (ing && typeof ing === 'object' && ing.bought) return 'bought'; const name = typeof ing === 'object' ? ing.name : ing; const g = S.grocery.filter(x => (x.name || x.text).toLowerCase() === String(name).toLowerCase()); return g.some(x => x.done) ? 'bought' : g.length ? 'list' : 'none'; };
+const PANTRY_RE = /\b(oil|vinegar|salt|pepper|spices?|cinnamon|cumin|paprika|oregano|thyme|rosemary|garlic powder|onion powder|chili flakes|bay lea(f|ves)|herbs?, dried|baking (soda|powder))\b/i;
+function isPantry(i) { const f = i && i.foodId && R.foodById && R.foodById[i.foodId]; if (f && ['olive-oil-fats', 'herbs-spices'].includes(f.group)) return true; return PANTRY_RE.test(String((i && i.name) || i || '')); }
+const groceryFor = name => S.grocery.filter(x => (x.name || x.text).toLowerCase() === String(name).toLowerCase());
+const boughtState = ing => { const o = ing && typeof ing === 'object' ? ing : { name: ing }; const g = groceryFor(o.name);
+  if (g.some(x => x.done) || o.bought) return o.used && !g.some(x => x.done) ? 'used' : 'bought';
+  if (o.used) return 'used'; if (isPantry(o)) return 'pantry'; return g.length ? 'list' : 'none'; };
+const STATE_TXT = { bought: '✓ bought', used: 'used — need more', pantry: 'pantry staple', list: 'not bought yet', none: 'not bought yet' };
+const gText = g => g.name + (g.amtPer != null ? ' — ' + r1(g.amtPer * (g.servings || 1)) + (g.unit ? ' ' + g.unit : '') : '') + ((g.servings || 1) > 1 ? ` (×${g.servings})` : '');
+// add one serving of each ingredient of a To-cook item to the grocery list (servings counted per meal copy)
+function listIngredients(t) {
+  if (t.listed) return 0; let n = 0;
+  for (const i of t.ingredients) {
+    const g = groceryFor(i.name), open = g.find(x => !x.done);
+    if (isPantry(i)) { if (!g.length) { S.grocery.push({ id: uid(), name: i.name, amtPer: null, unit: '', servings: 1, pantry: true, text: i.name + ' (pantry)', backups: i.backups || [], backupObjs: i.backupObjs || [], walmartItemId: i.walmartItemId || null, done: false, from: 'week' }); n++; } continue; }
+    if (open && open.from === 'week') { open.servings = (open.servings || 1) + 1; open.text = gText(open); }
+    else if (g.some(x => x.done) && !g.some(x => x.done && x.from === 'week' && (x.reserved || 0) < (x.servings || 1))) { const x = { id: uid(), name: i.name, amtPer: i.amount ?? null, unit: i.unit || '', servings: 1, backups: i.backups || [], backupObjs: i.backupObjs || [], walmartItemId: i.walmartItemId || null, done: false, from: 'week' }; x.text = gText(x); S.grocery.push(x); n++; }
+    else if (!g.length) { const x = { id: uid(), name: i.name, amtPer: i.amount ?? null, unit: i.unit || '', servings: 1, backups: i.backups || [], backupObjs: i.backupObjs || [], walmartItemId: i.walmartItemId || null, done: false, from: 'week' }; x.text = gText(x); S.grocery.push(x); n++; }
+  }
+  t.listed = true; return n;
+}
+function unlistIngredients(t) { if (!t.listed) return; for (const i of t.ingredients) { if (isPantry(i)) continue; const g = groceryFor(i.name).find(x => !x.done && x.from === 'week'); if (!g) continue; g.servings = (g.servings || 1) - 1; if (g.servings <= 0) S.grocery = S.grocery.filter(x => x !== g); else g.text = gText(g); } t.listed = false; }
+// making a meal uses one serving of each non-pantry ingredient
+function useIngredients(t) {
+  const usedNames = [];
+  for (const i of t.ingredients) {
+    if (isPantry(i)) continue;
+    const g = groceryFor(i.name), done = g.find(x => x.done) || g[0];
+    if (done) { done.servings = (done.servings || 1) - 1; if (done.servings <= 0) S.grocery = S.grocery.filter(x => x !== done); else done.text = gText(done); }
+    usedNames.push(i.name.toLowerCase());
+  }
+  // other meals that relied on the same (now used) bought ingredient
+  for (const o of S.toCook) if (o !== t) for (const i of o.ingredients) if (usedNames.includes(i.name.toLowerCase()) && !groceryFor(i.name).some(x => x.done) && (i.bought || boughtBefore(i))) { i.bought = false; i.used = true; }
+}
+const boughtBefore = i => !!i._wasBought;
 const ING_STOP = new Set(['cooked', 'raw', 'frozen', 'boiled', 'plain', 'reduced', 'fat', 'whole', 'canned', 'dry', 'fresh', 'hard', 'part', 'skim', 'any', 'other', 'brand', 'size', 'and', 'with', 'the', 'unsweetened', 'extra', 'virgin', 'brands', 'shapes', 'based']);
 const keyWords = s => words(s).map(stem).filter(w => !ING_STOP.has(w));
 function productMatches(p, name) { if (!p || p.nova == 4) return false; const pw = new Set([...words(p.name), ...(p.categories || []).filter(c => /^en:/.test(c)).flatMap(c => words(c.slice(3).replace(/-/g, ' ')))].map(stem)); const kw = keyWords(name); return kw.length > 0 && kw.every(w => pw.has(w)); }
@@ -198,7 +231,7 @@ async function markScannedForToCook(p) {
   for (const t of S.toCook) for (const i of t.ingredients) {
     if (boughtState(i) === 'bought') continue;
     const viaBackup = !productMatches(p, i.name) && (i.backups || []).find(b => productMatches(p, b));
-    if (productMatches(p, i.name) || viaBackup) { i.bought = true; i.boughtProduct = p.name || ''; if (viaBackup) i.gotBackup = viaBackup;
+    if (productMatches(p, i.name) || viaBackup) { i.bought = true; i.used = false; i.boughtProduct = p.name || ''; if (viaBackup) i.gotBackup = viaBackup;
       const g = S.grocery.find(x => !x.done && (x.name || x.text).toLowerCase() === i.name.toLowerCase()); if (g) g.done = true; hits.push(i.name); }
   }
   if (hits.length) await save('toCook', 'grocery');
@@ -217,36 +250,79 @@ function renderToCook() {
   const tn = tonightItem();
   $('#tonightCard').hidden = !tn;
   if (tn) $('#tonightCard').innerHTML = `<button class="tonight-btn" data-cook="${tn.id}">🌙 Tonight: you bought ingredients for <b>${esc(tn.name)}</b><span class="sub">Tap to see the steps</span></button>`;
-  if (!S.toCook.length) { el.hidden = true; return; }
-  el.hidden = false;
-  const list = [...S.toCook].sort((a, b) => String(a.plannedDay || '9').localeCompare(String(b.plannedDay || '9')));
-  el.innerHTML = `<b>🍳 To cook</b><ul class="cook-list">${list.map(t => { const n = t.ingredients.length, b = t.ingredients.filter(i => boughtState(i) === 'bought').length;
-    return `<li><button class="cook-item" data-cook="${t.id}"><span class="nm">${esc(t.name)}</span><span class="sub">${t.plannedDay ? esc(fmtDay(fromKey(t.plannedDay)).split(',')[0]) + (t.slot ? ' · ' + esc(t.slot) : '') + ' · ' : ''}${n ? `${b} of ${n} ingredients bought` : 'No ingredient list'}</span></button></li>`; }).join('')}</ul>`;
+  const wk = weekKey(new Date()), old = S.toCook.filter(t => t.week && t.week < wk), ask = dueToAsk();
+  const pre = (old.length ? `<div class="roll"><b>New week</b><div class="sub">${old.length} meal${old.length === 1 ? '' : 's'} from last week not made yet.</div><button class="btn primary big" data-roll="move">Move to this week</button><button class="btn big" data-roll="clear">Clear them</button></div>` : '') + (ask ? askHTML(ask) : '');
+  if (!S.toCook.length) { el.hidden = !pre; el.innerHTML = pre; return; }
+  el.hidden = false; const tk = dayKey(new Date());
+  const list = [...S.toCook].sort((a, b) => { const ka = a.plannedDay === tk ? '0' : (a.plannedDay || '9'), kb = b.plannedDay === tk ? '0' : (b.plannedDay || '9'); return ka.localeCompare(kb) || SLOTS.indexOf(a.slot) - SLOTS.indexOf(b.slot); });
+  const groups = []; for (const t of list) { const g = t.plannedDay === tk ? 'Today' : t.plannedDay ? fmtDay(fromKey(t.plannedDay)).split(',')[0] + ' · ' + fmtDay(fromKey(t.plannedDay)).split(',')[1] : 'Any day'; let G = groups.find(x => x.g === g); if (!G) groups.push(G = { g, items: [] }); G.items.push(t); }
+  el.innerHTML = pre + `<b>🍳 To cook</b><div class="sub">Pick any meal, any day.</div>${groups.map(G => `<div class="cook-day">${esc(G.g)}</div><ul class="cook-list">${G.items.map(t => { const n = t.ingredients.length, b = t.ingredients.filter(i => ['bought', 'pantry'].includes(boughtState(i))).length, u = t.ingredients.filter(i => boughtState(i) === 'used').length;
+    return `<li><button class="cook-item" data-cook="${t.id}"><span class="nm">${t.slot ? `<span class="slot">${esc(t.slot)}</span> ` : ''}${esc(t.name)}</span><span class="sub">${n ? `${b} of ${n} ingredients ready${u ? ` · ${u} used — need more` : ''}` : 'No ingredient list'}</span></button></li>`; }).join('')}</ul>`).join('')}`;
 }
 function openCook(id) {
   const t = S.toCook.find(x => x.id === id); if (!t) return;
   const meal = t.mealId && mealById(t.mealId), nut = meal && meal.nutritionApprox;
   $('#cookBody').innerHTML = `<h2>${esc(t.name)}</h2>
     <h3>Ingredients</h3><ul class="cook-ings">${t.ingredients.map(i => { const st = boughtState(i);
-      return `<li class="${st === 'bought' ? 'got' : ''}"><span>${esc(i.name)}${i.amount != null ? ' — ' + esc(r1(i.amount)) + (i.unit ? ' ' + esc(i.unit) : '') : ''}</span><span class="st">${st === 'bought' ? '✓ bought' : 'not bought yet'}</span>${i.gotBackup ? `<div class="sub">✓ Got backup: ${esc(i.gotBackup)}${i.boughtProduct ? ' (' + esc(i.boughtProduct) + ')' : ''}</div>` : ''}${i.substitutedFor ? `<div class="sub">Backup used instead of ${esc(i.substitutedFor)} (your allergy list)</div>` : ''}${i.backups.length ? `<div class="sub">If out: ${i.backups.map(esc).join(' or ')}</div>` : ''}${availHTML(i, i.backupObjs)}</li>`; }).join('') || '<li class="sub">No ingredient list from research.</li>'}</ul>
+      return `<li class="${st === 'bought' ? 'got' : ''}"><span>${esc(i.name)}${i.amount != null ? ' — ' + esc(r1(i.amount)) + (i.unit ? ' ' + esc(i.unit) : '') : ''}</span><span class="st st-${st}">${STATE_TXT[st]}</span>${i.gotBackup ? `<div class="sub">✓ Got backup: ${esc(i.gotBackup)}${i.boughtProduct ? ' (' + esc(i.boughtProduct) + ')' : ''}</div>` : ''}${i.substitutedFor ? `<div class="sub">Backup used instead of ${esc(i.substitutedFor)} (your allergy list)</div>` : ''}${i.backups.length ? `<div class="sub">If out: ${i.backups.map(esc).join(' or ')}</div>` : ''}${availHTML(i, i.backupObjs)}</li>`; }).join('') || '<li class="sub">No ingredient list from research.</li>'}</ul>
     <h3>Steps</h3>${t.steps.length ? `<ol class="cook-steps">${t.steps.map(x => `<li>${esc(x)}</li>`).join('')}</ol>` : '<div class="sub">Research has no steps for this one yet.</div>'}
     ${nut && nut.kcal != null ? `<div class="sub">About ${esc(nut.kcal)} kcal per serving · research nutrition${meal.evidence ? ' · ' + esc(meal.evidence) + ' evidence' : ''}</div>${srcLinks(meal.sources)}` : ''}
-    <div class="cook-actions"><button class="btn primary big" id="cookDone" data-id="${t.id}">✅ Mark as cooked</button><button class="btn big" id="cookRemove" data-id="${t.id}">Remove</button><button class="btn big" id="cookClose">Close</button></div>`;
+    <div class="cook-actions"><button class="btn primary big" id="cookDone" data-id="${t.id}">✅ Mark as cooked</button><button class="btn big" id="cookRemove" data-id="${t.id}">Remove</button><button class="btn big" id="cookClose" data-id="${t.id}">Close</button></div>`;
   const d = $('#cookView'); if (!d.open) d.showModal(); document.activeElement && document.activeElement.blur(); d.scrollTop = 0; setTimeout(() => { d.scrollTop = 0; }, 50);
 }
+function askHTML(t) { return `<div class="ask-made"><b>Did you make it?</b><div class="nm">${esc(t.name)}${t.plannedDay ? ` <span class="sub">${esc(fmtDay(fromKey(t.plannedDay)).split(',')[0])}${t.slot ? ' · ' + esc(t.slot) : ''}</span>` : ''}</div>
+  <button class="btn primary big" data-ask="yes" data-id="${t.id}">✅ Yes, I made it</button><button class="btn big" data-ask="later" data-id="${t.id}">Not yet</button><button class="btn big" data-ask="skip" data-id="${t.id}">Skip this one</button></div>`; }
+function askMade(id) { const t = S.toCook.find(x => x.id === id); if (!t) return $('#cookView').close(); $('#cookBody').innerHTML = askHTML(t); if (!$('#cookView').open) $('#cookView').showModal(); }
+/* ---------- week approval ---------- */
+const weekKey = d => { d = startOfDay(d); return dayKey(addDays(d, -d.getDay())); }; // Sunday-start week
+const SLOT_HOUR = { breakfast: 11, lunch: 16, dinner: 21, snack: 21 }; // app heuristic for "after the slot", not research
+function weekPlanDays() { const wk = weekKey(new Date()), end = dayKey(addDays(fromKey(wk), 7)); return planDaysAhead().filter(d => d.date < end); }
+async function approveWeek(silent) {
+  const days = weekPlanDays(), wk = weekKey(new Date()); if (!days.length) { if (!silent) toast('No meals planned this week'); return; }
+  const want = []; for (const d of days) for (const slot of SLOTS) { const id = d.meals[slot]; const m = id && mealById(id); if (m) want.push({ m, day: d.date, slot }); }
+  let removed = 0, added = 0, listed = 0;
+  for (const t of [...S.toCook]) if (t.week === wk && t.source === 'week' && !want.some(w => w.m.id === t.mealId && w.day === t.plannedDay && w.slot === t.slot)) { unlistIngredients(t); S.toCook = S.toCook.filter(x => x !== t); removed++; }
+  for (const w of want) {
+    let t = S.toCook.find(x => x.mealId === w.m.id && x.plannedDay === w.day && x.slot === w.slot);
+    if (!t) { await saveToCook({ mealId: w.m.id, name: w.m.name }, 'week', w.day, w.slot); t = S.toCook[S.toCook.length - 1]; added++; }
+    t.week = wk; t.source = 'week'; listed += listIngredients(t);
+  }
+  S.settings.weekApproved = wk; await save('toCook', 'grocery', 'settings');
+  if (!silent) toast(`✅ ${want.length} meals saved to To cook${added < want.length ? ` (${want.length - added} already there)` : ''}${removed ? `, ${removed} updated` : ''} · ${listed} grocery items added`, 3500);
+  renderToCook();
+}
+const weekApproved = () => S.settings.weekApproved === weekKey(new Date());
+async function rollWeek(mode) {
+  const wk = weekKey(new Date()), old = S.toCook.filter(t => t.week && t.week < wk);
+  if (mode === 'move') for (const t of old) { const off = Math.round((fromKey(wk) - fromKey(t.week)) / 86400000); t.week = wk; if (t.plannedDay) t.plannedDay = dayKey(addDays(fromKey(t.plannedDay), off)); t.notYetOn = null; }
+  else { for (const t of old) unlistIngredients(t); S.toCook = S.toCook.filter(t => !old.includes(t)); }
+  await save('toCook', 'grocery'); toast(mode === 'move' ? `Moved ${old.length} meals to this week` : `Cleared ${old.length} meals`); renderToCook();
+}
+function dueToAsk() { const now = new Date(), tk = dayKey(now), h = now.getHours();
+  return S.toCook.find(t => t.plannedDay && t.notYetOn !== tk && (t.plannedDay < tk || (t.plannedDay === tk && t.slot && h >= (SLOT_HOUR[t.slot] || 24)))) || null; }
 async function markCooked(id) {
   const t = S.toCook.find(x => x.id === id); if (!t) return;
+  for (const o of S.toCook) for (const i of o.ingredients) i._wasBought = boughtState(i) === 'bought';
+  useIngredients(t); for (const o of S.toCook) for (const i of o.ingredients) delete i._wasBought;
   const meal = t.mealId && mealById(t.mealId), nut = (meal && meal.nutritionApprox) || null;
   const per = {}; if (nut) for (const k of NUTS) per[k] = nut[NUT_EXPORT[k]] ?? null;
   S.entries.push({ id: uid(), ts: Date.now(), name: t.name, brand: '', barcode: '', source: nut ? 'research-meal' : 'manual', basis: 'serving', servingSize: '1 serving (research recipe)', per, qty: 1, categories: [], foodId: null, mealId: t.mealId, group: '', nova: null, social: false, thumb: null, ingredientsText: t.ingredients.map(i => i.name).join(', ') });
-  S.toCook = S.toCook.filter(x => x !== t); await save('entries', 'toCook');
+  S.toCook = S.toCook.filter(x => x !== t); await save('entries', 'toCook', 'grocery');
   $('#cookView').close(); toast(nut ? `Logged ${t.name} (${nut.kcal} kcal, research nutrition)` : `Logged ${t.name}. Research has no nutrition for it, so add values if you know them.`, 3500); show('today');
 }
 document.addEventListener('click', async e => {
+  const ap = e.target.closest('[data-approve]'); if (ap) { e.preventDefault(); await approveWeek(); if (curTab === 'plan') renderPlan(); return; }
   const c = e.target.closest('[data-cook]'); if (c) { e.preventDefault(); return openCook(c.dataset.cook); }
   if (e.target.id === 'cookDone') return markCooked(e.target.dataset.id);
   if (e.target.id === 'cookRemove') { S.toCook = S.toCook.filter(x => x.id !== e.target.dataset.id); await save('toCook'); $('#cookView').close(); renderToCook(); toast('Removed from To cook'); }
-  if (e.target.id === 'cookClose') $('#cookView').close();
+  if (e.target.id === 'cookClose') { const id = e.target.dataset.id; return id ? askMade(id) : $('#cookView').close(); }
+  const ak = e.target.closest('[data-ask]'); if (ak) { e.preventDefault(); const id = ak.dataset.id, v = ak.dataset.ask;
+    if (v === 'yes') return markCooked(id);
+    const t = S.toCook.find(x => x.id === id);
+    if (v === 'skip' && t) { unlistIngredients(t); S.toCook = S.toCook.filter(x => x !== t); await save('toCook', 'grocery'); toast('Skipped ' + t.name); }
+    if (v === 'later' && t) { t.notYetOn = dayKey(new Date()); await save('toCook'); }
+    if ($('#cookView').open) $('#cookView').close(); renderToCook(); return; }
+  const rw = e.target.closest('[data-roll]'); if (rw) { e.preventDefault(); await rollWeek(rw.dataset.roll); }
 });
 async function addSwapToGrocery(a, removeId, opts = {}) {
   let removed = '';
@@ -899,15 +975,15 @@ function renderPlan() {
   $('#planDays').innerHTML = days.map(d => { const i = all.indexOf(d), prev = all[i - 1], next = all[i + 1];
     return `<details class="day${d.date === tk ? ' today' : ''}"${d.date === tk ? ' open' : ''} data-date="${d.date}"><summary><h3>${d.date === tk ? 'Today · ' : ''}${fmtDay(fromKey(d.date))}</h3>${SLOTS.filter(s => d.meals[s]).map(s => `<div class="slot"><span class="k">${s}</span><span>${esc((mealById(d.meals[s]) || {}).name || '?')}</span></div>`).join('') || '<div class="sub">Nothing picked yet</div>'}</summary>
     ${SLOTS.filter(s => (d.options[s] || []).length).map(s => `<div class="opt-slot"><div class="k">${s}: choose one</div><div class="chips">${d.options[s].map(id => { const m = mealById(id); if (!m) return ''; const c = d.meals[s] === id ? null : conflict(m, d, s, prev, next); return `<button type="button" class="${d.meals[s] === id ? 'on' : ''}${c ? ' dim' : ''}" data-slot="${s}" data-id="${id}"${c ? ` title="${esc(c)}"` : ''}>${esc(m.name)}${c ? ` <small>(${esc(c)})</small>` : ''}</button>`; }).join('')}</div></div>`).join('')}</details>`; }).join('');
-  renderPrep();
+  renderPrep(); const ab = $('#approveWeekPlan'); if (ab) ab.textContent = weekApproved() ? '✅ This week\'s meals are in To cook (tap to refresh)' : '✅ Use these meals this week';
 }
 $('#planDays').onclick = async e => {
   const b = e.target.closest('button[data-slot]'); if (!b) return; const det = b.closest('[data-date]'); const all = S.plan.days, i = all.findIndex(d => d.date === det.dataset.date), d = all[i];
   const m = mealById(b.dataset.id), c = conflict(m, d, b.dataset.slot, all[i - 1], all[i + 1]);
   if (d.meals[b.dataset.slot] === m.id) { delete d.meals[b.dataset.slot]; S.toCook = S.toCook.filter(t => !(t.mealId === m.id && t.plannedDay === d.date && t.slot === b.dataset.slot)); await save('toCook'); }
   else { if (c) return toast("Can't pick that: " + c); const old = d.meals[b.dataset.slot]; if (old) { S.toCook = S.toCook.filter(t => !(t.mealId === old && t.plannedDay === d.date && t.slot === b.dataset.slot)); await save('toCook'); } d.meals[b.dataset.slot] = m.id;
-    if (b.dataset.slot === 'dinner' && ((m.ingredients || []).length || (m.steps || []).length)) await addSwapToGrocery({ mealId: m.id, name: m.name }, null, { day: d.date, slot: 'dinner' }); }
-  await save('plan'); renderPlan(); const again = $(`#planDays [data-date="${d.date}"]`); if (again) again.open = true;
+    if (weekApproved()) {} else if (b.dataset.slot === 'dinner' && ((m.ingredients || []).length || (m.steps || []).length)) await addSwapToGrocery({ mealId: m.id, name: m.name }, null, { day: d.date, slot: 'dinner' }); }
+  await save('plan'); if (weekApproved()) await approveWeek(true); renderPlan(); const again = $(`#planDays [data-date="${d.date}"]`); if (again) again.open = true;
 };
 $('#planMode').onchange = async () => { S.settings.planMode = $('#planMode').value; await save('settings'); ensurePlan(true); renderPlan(); };
 $('#regenPlan').onclick = async () => { if (!S.plan) return toast('Add some meals first'); const all = S.plan.days, tk = dayKey(new Date()); all.forEach((d, i) => { if (d.date < tk) return; makeOptions(d, all[i - 1]); autoFillDay(d, all[i - 1], null); }); await save('plan'); renderPlan(); toast('Week filled ✨'); };
@@ -934,7 +1010,7 @@ function renderPrep() {
   const count = {}; days.forEach(d => Object.values(d.meals).forEach(id => count[id] = (count[id] || 0) + 1));
   const batch = Object.entries(count).filter(([id, n]) => n > 1 || (mealById(id) && mealById(id).prep && mealById(id).prep.batchCookable)).map(([id, n]) => { const m = mealById(id); const when = days.filter(d => Object.values(d.meals).includes(id)).map(d => fmtDay(fromKey(d.date)).split(',')[0]); return `<div class="prep-task">🍲 Batch-cook <b>${esc(m ? m.name : id)}</b> × ${n} portions <span class="sub">(${when.join(', ')})</span></div>`; });
   const ings = combinedIngredients(days), shared = ings.filter(i => i.meals.size > 1).map(i => `<div class="prep-task">🔪 Prep <b>${esc(i.name)}</b> once for: ${[...i.meals].map(esc).join(', ')}</div>`);
-  el.innerHTML = `<b>Next ${days.length} days</b>${batch.length || shared.length ? batch.join('') + shared.join('') : '<div class="sub">No repeated meals or shared ingredients, so there is no batch prep this week.</div>'}
+  el.innerHTML = `<button class="btn primary big approve-week" data-approve="1">${weekApproved() ? '✅ This week\'s meals are in To cook (tap to refresh)' : '✅ Use these meals this week'}</button><b>Next ${days.length} days</b>${batch.length || shared.length ? batch.join('') + shared.join('') : '<div class="sub">No repeated meals or shared ingredients, so there is no batch prep this week.</div>'}
     <h3 style="font-size:16px;margin:12px 0 4px">Combined ingredients</h3>${ings.length ? `<ul class="sub" style="margin:0;padding-left:18px">${ings.map(i => `<li>${esc(ingText(i))}</li>`).join('')}</ul>` : '<div class="sub">These meals have no ingredients listed.</div>'}`;
 }
 $('#planToGrocery').onclick = async () => {
@@ -1017,7 +1093,7 @@ $('#installBtn').onclick = async () => { if (deferredPrompt) { deferredPrompt.pr
   if (!S.profile) { fillProfile(); show('profile'); } else show('today');
   resolvePending();
   document.addEventListener('visibilitychange', async () => { if (document.visibilityState === 'visible' && navigator.onLine) { await loadResearch(); if (curTab !== 'add' && curTab !== 'profile' && curTab !== 'quiz') show(curTab); } });
-  window.__fl = { mainFoods, mealById, library, S, R, save, show, weeklyExport, offLookup, parseLabel, lookupAndOpen, storeCheck, ensurePlan, addSwapToGrocery, walmartCartUrl, renderGrocery, storeKey, availHTML, exportProfile, markScannedForToCook, planDaysAhead, saveToCook, renderToCook, tonightItem, dinnerHour, resolveSwapQueue, swapsFor };
+  window.__fl = { mainFoods, mealById, library, S, R, save, show, weeklyExport, offLookup, parseLabel, lookupAndOpen, storeCheck, ensurePlan, addSwapToGrocery, approveWeek, weekKey, boughtState, markCooked, walmartCartUrl, renderGrocery, storeKey, availHTML, exportProfile, markScannedForToCook, planDaysAhead, saveToCook, renderToCook, tonightItem, dinnerHour, resolveSwapQueue, swapsFor };
 })();
 
 /* ---------- resolve offline-queued barcodes when back online ---------- */
