@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#3f7d4e">
+<meta name="description" content="Personal food log: barcode & label scan, calorie counter, Mediterranean guidance, meal plans and grocery lists. Data stays on your phone.">
+<title>Food Log</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="style.css?v=1">
+</head>
+<body>
+<header class="top">
+  <h1 id="title">Today</h1>
+  <button class="icon-btn" id="settingsBtn" aria-label="Settings">⚙️</button>
+</header>
+
+<main>
+<!-- PROFILE (first run; stored on this phone only) -->
+<section class="screen" id="s-profile" hidden>
+  <form class="card" id="profileForm">
+    <h2 style="margin-top:0">👋 Welcome! Quick setup</h2>
+    <p class="sub">No account, no password. This stays on your phone and is only included when you share a weekly check-in.</p>
+    <p class="sub">Just 4 things to start: sex, age, height, weight.</p>
+    <label>Sex *<select id="pfSex"><option value="">Choose…</option><option value="female">Female</option><option value="male">Male</option><option value="other">Other / prefer not to say</option></select></label>
+    <div class="row2"><label>Age *<input id="pfAge" inputmode="numeric" placeholder="years"></label><label>or birth date<input type="date" id="pfBirth"></label></div>
+    <div class="row between"><span class="sub">Units</span><div class="seg mini" id="pfUnits"><button type="button" class="seg-btn active" data-u="us">ft / lb</button><button type="button" class="seg-btn" data-u="metric">cm / kg</button></div></div>
+    <div class="row2 us-only"><label>Height (ft) *<input id="pfFt" inputmode="numeric"></label><label>Height (in)<input id="pfIn" inputmode="decimal"></label></div>
+    <label class="metric-only" hidden>Height (cm) *<input id="pfCm" inputmode="decimal"></label>
+    <label class="us-only">Weight (lb) *<input id="pfLb" inputmode="decimal"></label>
+    <label class="metric-only" hidden>Weight (kg) *<input id="pfKg" inputmode="decimal"></label>
+    <fieldset class="goals allergy"><legend>🚫 Allergies (optional)</legend>
+      <div class="chips" id="pfAllergens">
+        <button type="button" data-al="milk">Milk</button><button type="button" data-al="eggs">Eggs</button><button type="button" data-al="fish">Fish</button><button type="button" data-al="shellfish">Shellfish</button><button type="button" data-al="tree-nuts">Tree nuts</button><button type="button" data-al="peanuts">Peanuts</button><button type="button" data-al="wheat">Wheat / gluten</button><button type="button" data-al="soy">Soy</button><button type="button" data-al="sesame">Sesame</button>
+      </div>
+      <label>Other foods to avoid (comma separated)<input id="pfAvoid" placeholder="e.g. pork, cilantro"></label>
+    </fieldset>
+    <details class="more"><summary>More about you (optional)</summary>
+    <label>Activity level<select id="pfAct"><option value="">Choose…</option><option value="sedentary">Sedentary (little exercise)</option><option value="light">Light (1–3 days/week)</option><option value="moderate">Moderate (3–5 days/week)</option><option value="active">Active (6–7 days/week)</option><option value="very-active">Very active (hard daily exercise / physical job)</option><option value="varies">Varies day to day (set it on the Today screen)</option></select></label>
+    <fieldset class="goals"><legend>Goals</legend>
+      <label class="check"><input type="checkbox" value="lose-weight"> Lose weight</label>
+      <label class="check"><input type="checkbox" value="maintain-weight"> Maintain weight</label>
+      <label class="check"><input type="checkbox" value="gain-weight"> Gain weight</label>
+      <label class="check"><input type="checkbox" value="eat-more-mediterranean" checked> Eat more Mediterranean</label>
+    </fieldset>
+    <label>Other goals (optional)<textarea id="pfGoalsText" rows="2" placeholder="In your own words"></textarea></label>
+    <label>Daily minimum calories to aim for (optional)<input id="pfTarget" inputmode="numeric" placeholder="Leave blank if unsure"></label>
+    </details>
+    <div class="status err" id="pfErr"></div>
+    <div class="row"><button type="button" class="btn" id="pfCancel" hidden>Cancel</button><button class="btn primary">Save profile</button></div>
+  </form>
+</section>
+
+<!-- QUESTIONNAIRE (from data/questionnaire.json) -->
+<section class="screen" id="s-quiz" hidden>
+  <div id="quizBody"></div>
+</section>
+
+<!-- TODAY -->
+<section class="screen" id="s-today">
+  <div id="homeAlerts"></div>
+  <div class="card timer-card">
+    <div class="label">Since last meal</div>
+    <div class="timer" id="timer">—</div>
+    <div class="sub" id="lastMeal">Nothing logged yet</div>
+    <div class="next" id="nextMeal"></div>
+    <div class="act-seg" id="actSeg" aria-label="Today's activity">
+      <button class="chip" data-a="desk">🪑 Desk day</button>
+      <button class="chip" data-a="field">🥾 Field day</button>
+    </div>
+  </div>
+  <div class="card counter-card">
+    <div class="day-nav">
+      <button class="icon-btn" id="prevDay" aria-label="Previous day">‹</button>
+      <div id="dayLabel">Today</div>
+      <button class="icon-btn" id="nextDay" aria-label="Next day">›</button>
+    </div>
+    <div class="kcal-row"><span class="kcal" id="kcalTotal">0</span><span class="unit">kcal</span></div>
+    <div class="target" id="targetLine"></div>
+    <div class="bar"><div id="targetBar"></div></div>
+    <div class="goal-chips" id="todayGoals"></div>
+    <div class="nutri" id="nutriBars"></div>
+  </div>
+  <div class="card water-card"><div class="w-info"><b>💧 Water & drinks</b><div class="sub" id="waterSub"></div></div><button class="step-btn sm" id="waterMinus" aria-label="One less cup">−</button><div class="w-count" id="waterCount">0</div><button class="step-btn sm plus" id="waterPlus" aria-label="One more cup">+</button></div>
+  <div id="fieldSnacks"></div>
+  <div id="homeTips"></div>
+  <button class="btn primary huge" id="bigAdd">➕ Add food</button>
+  <button class="btn big skip-btn" id="skipBtn">⏭️ Skipped a meal</button>
+  <div class="card" id="skipPanel" hidden>
+    <b>Which meal?</b> <span class="sub">No worries, logging it helps plan around it.</span>
+    <div class="chips" id="skipReasons">
+      <button type="button" data-r="no-time">No time</button><button type="button" data-r="no-appetite">No appetite</button><button type="button" data-r="forgot">Forgot</button><button type="button" data-r="no-food-available">No food available</button><button type="button" data-r="other">Other</button>
+    </div>
+    <div class="sub" style="margin-top:6px">Reason is optional. Tap the meal to log it:</div>
+    <div class="slot-btns" id="skipSlots"><button class="btn" data-s="breakfast">Breakfast</button><button class="btn" data-s="lunch">Lunch</button><button class="btn" data-s="dinner">Dinner</button><button class="btn" data-s="snack">Snack</button></div>
+  </div>
+  <ul class="entries" id="entries"></ul>
+  <div class="empty" id="entriesEmpty">Nothing logged yet today.</div>
+  <p class="care-small">💚 If low appetite or skipped meals keep happening for a few weeks, or you're losing weight without trying, please talk with your doctor.</p>
+</section>
+
+<!-- ADD -->
+<section class="screen" id="s-add" hidden>
+  <button class="btn back" id="addBack">‹ Back</button>
+  <div id="quickAdd"></div>
+  <div class="seg" role="tablist">
+    <button class="seg-btn active" data-mode="barcode">📷 Scan</button>
+    <button class="seg-btn" data-mode="label">🏷️ Label</button>
+    <button class="seg-btn" data-mode="out">🍽️ Eating out</button>
+    <button class="seg-btn" data-mode="manual">✍️ Type</button>
+  </div>
+
+  <div class="mode" id="m-barcode">
+    <div class="card">
+      <div class="video-wrap" id="videoWrap"><video id="video" playsinline muted></video><div class="reticle"></div><div class="video-msg" id="videoMsg">Camera is off</div></div>
+      <button class="btn primary big" id="scanBtn">📷 Start camera scan</button>
+      <label class="btn big file-btn">🖼️ Scan barcode from a photo<input type="file" accept="image/*" capture="environment" id="barcodeFile" hidden></label>
+      <div class="or">or type the number on the barcode</div>
+      <form class="row" id="barcodeForm"><input id="barcodeInput" inputmode="numeric" pattern="[0-9]*" placeholder="e.g. 3017620422003" autocomplete="off"><button class="btn primary" type="submit">Look up</button></form>
+      <div class="status" id="scanStatus"></div>
+    </div>
+  </div>
+
+  <div class="mode" id="m-label" hidden>
+    <div class="card">
+      <p class="hint">Take a clear, flat, well-lit photo of the <b>Nutrition Facts</b> panel. Text is read on your phone (no upload). You'll check every number before saving.</p>
+      <label class="btn primary big file-btn">📸 Take / choose label photo<input type="file" accept="image/*" capture="environment" id="labelFile" hidden></label>
+      <img id="labelPreview" class="label-preview" alt="" hidden>
+      <div class="status" id="ocrStatus"></div>
+      <details id="ocrTextBox" hidden><summary>Text read from photo</summary><pre id="ocrText"></pre></details>
+    </div>
+  </div>
+
+  <div class="mode" id="m-out" hidden>
+    <div class="card"><p class="hint">Restaurant or someone else's cooking? Give it a name and your best guess. It's saved as a <b>user estimate</b>.</p>
+      <label class="btn big file-btn">📸 Add a photo (optional)<input type="file" accept="image/*" capture="environment" id="outFile" hidden></label>
+      <button class="btn primary big" id="outBtn">🍽️ Log eating out</button></div>
+  </div>
+  <div class="mode" id="m-manual" hidden>
+    <div class="card"><p class="hint">Enter values from the package or a trusted source.</p><button class="btn primary big" id="manualBtn">✍️ Enter food manually</button></div>
+  </div>
+
+  <!-- food confirmation form (shared) -->
+  <form class="card food-form" id="foodForm" hidden>
+    <div class="ff-head"><img id="ffThumb" alt="" hidden><div><div class="src-badge" id="ffSource"></div><div class="sub" id="ffMeta"></div></div></div>
+    <label>Name<input id="ffName" required></label>
+    <div class="amount">
+      <div class="amount-label" id="qtyLabel">How many servings?</div>
+      <div class="stepper"><button type="button" class="step-btn" id="qtyMinus" aria-label="Less">−</button><input id="ffQty" inputmode="decimal" value="1" aria-label="Amount"><button type="button" class="step-btn" id="qtyPlus" aria-label="More">+</button></div>
+      <div class="chips" id="measureChips"></div>
+      <div class="suggest" id="suggestPortion"></div>
+    </div>
+    <div class="total-line">= <b id="ffTotal">—</b></div>
+    <div class="upf-flag" id="ffUpf" hidden>⚠️ Ultra-processed (NOVA 4)</div>
+    <div class="sub" id="ffMatch"></div>
+    <details class="more" id="nutBox"><summary>Nutrition values <span class="sub" id="nutBasisLabel"></span></summary>
+      <div class="row2">
+        <label>Values are per<select id="ffBasis"><option value="serving">serving</option><option value="100g">100 g / ml</option></select></label>
+        <label>Serving size<input id="ffServing" placeholder="e.g. 15 g"></label>
+      </div>
+      <div class="grid-n">
+        <label>Calories (kcal)<input id="ff_kcal" inputmode="decimal"></label>
+        <label>Protein (g)<input id="ff_protein" inputmode="decimal"></label>
+        <label>Carbs (g)<input id="ff_carbs" inputmode="decimal"></label>
+        <label>Fiber (g)<input id="ff_fiber" inputmode="decimal"></label>
+        <label>Sugars (g)<input id="ff_sugar" inputmode="decimal"></label>
+        <label>Fat (g)<input id="ff_fat" inputmode="decimal"></label>
+        <label>Sat. fat (g)<input id="ff_satfat" inputmode="decimal"></label>
+        <label>Sodium (mg)<input id="ff_sodium" inputmode="decimal"></label>
+      </div>
+    </details>
+    <details class="more"><summary>More details</summary>
+      <label>Brand<input id="ffBrand"></label>
+      <label>When<input type="datetime-local" id="ffWhen"></label>
+      <label>Food group<select id="ffGroup"></select></label>
+      <label>Processing (NOVA)<select id="ffNova"><option value="">Unknown</option><option value="1">1 · Unprocessed / minimal</option><option value="2">2 · Culinary ingredient</option><option value="3">3 · Processed</option><option value="4">4 · Ultra-processed</option></select></label>
+      <label class="check"><input type="checkbox" id="ffKeepThumb" checked> Keep photo thumbnail</label>
+    </details>
+    <label class="check fav-check"><input type="checkbox" id="ffSocial"> 👥 Ate with friends or family</label>
+    <label class="check fav-check"><input type="checkbox" id="ffFav"> ⭐ Save as favorite for one-tap logging</label>
+    <div class="row"><button type="button" class="btn" id="ffCancel">Cancel</button><button class="btn primary" type="submit" id="ffSave">Save to log</button></div>
+  </form>
+</section>
+
+<!-- PROGRESS -->
+<section class="screen" id="s-progress" hidden>
+  <div id="phaseCard"></div>
+  <div id="stepsBody"></div>
+  <div id="focusGoal"></div>
+  <h2>My goals</h2>
+  <div id="goalsBody"></div>
+  <button class="btn big" id="editGoalsBtn">🎯 Choose goals</button>
+  <form class="card" id="goalsForm" hidden></form>
+  <div class="card nova-card" id="novaCard"></div>
+  <div id="medasCard"></div>
+  <div id="sodiumCard"></div>
+  <div id="focusBody"></div>
+  <div class="card">
+    <b>Weekly check-in</b>
+    <p class="sub">Shares your last 7 days of logs, goals, profile and products awaiting research, so next week's steps fit what you actually eat. Nothing leaves your phone unless you tap Share.</p>
+    <button class="btn primary big" id="checkinBtn">📤 Share weekly check-in</button>
+    <div class="sub" id="dataVersion"></div>
+  </div>
+  <button class="btn big" id="openGuide">🫒 Mediterranean guide</button>
+</section>
+
+<!-- GUIDE -->
+<section class="screen" id="s-guide" hidden>
+  <button class="btn back" id="guideBack">‹ Back</button>
+  <div class="card" id="guideIntro"></div>
+  <div id="todayGroups"></div>
+  <div id="guideGroups"></div>
+  <div class="card" id="queueCard">
+    <b>Awaiting research</b>
+    <p class="sub">Scanned products that don't match any researched food yet.</p>
+    <ul class="queue" id="queueList"></ul>
+    <div class="row"><button class="btn primary" id="sendQueueBtn">📤 Send for research</button><button class="btn" id="clearQueueBtn">Clear sent</button></div>
+  </div>
+</section>
+
+<!-- PLAN -->
+<section class="screen" id="s-plan" hidden>
+  <div class="card">
+    <div class="row between"><b>Meal planner</b>
+      <select id="planMode" aria-label="Refresh"><option value="weekly">New plan weekly</option><option value="daily">Roll daily</option></select></div>
+    <div class="sub" id="planNote"></div>
+    <div class="row"><button class="btn primary" id="regenPlan">✨ Auto-fill week</button><button class="btn" id="planToGrocery">🛒 To grocery list</button></div>
+  </div>
+  <div id="planDays"></div>
+  <h2>Meal prep</h2>
+  <div class="card" id="prepCard"></div>
+  <h2>Meal library</h2>
+  <div class="placeholder" id="libPlaceholder"></div>
+  <ul class="lib" id="library"></ul>
+  <button class="btn primary big" id="addMealBtn">➕ Add my own meal</button>
+  <form class="card" id="mealForm" hidden>
+    <label>Meal name<input id="mfName" required></label>
+    <label>Slot<select id="mfSlot"><option>breakfast</option><option>lunch</option><option selected>dinner</option><option>snack</option></select></label>
+    <label>Ingredients (one per line, e.g. "200 g chickpeas")<textarea id="mfIng" rows="5"></textarea></label>
+    <label>Notes / steps (optional)<textarea id="mfSteps" rows="3"></textarea></label>
+    <div class="row"><button type="button" class="btn" id="mfCancel">Cancel</button><button class="btn primary">Save meal</button></div>
+  </form>
+</section>
+
+<!-- GROCERY -->
+<section class="screen" id="s-grocery" hidden>
+  <button class="btn primary big" id="storeBtn" style="margin:0 0 10px">🏪 Store mode: scan in the aisle</button>
+  <div class="card" id="storePanel" hidden>
+    <div class="video-wrap"><video id="storeVideo" playsinline muted></video><div class="reticle"></div><div class="video-msg" id="storeMsg">Point at a barcode</div></div>
+    <form class="row" id="storeForm"><input id="storeInput" inputmode="numeric" placeholder="or type barcode" autocomplete="off"><button class="btn">Check</button></form>
+    <div id="verdict"></div>
+    <button class="btn big" id="storeClose">Done shopping</button>
+  </div>
+  <form class="row" id="groceryForm"><input id="groceryInput" placeholder="Add an item…" autocomplete="off"><button class="btn primary">Add</button></form>
+  <ul class="grocery" id="groceryList"></ul>
+  <div class="empty" id="groceryEmpty">Your list is empty. Add items above or send your meal plan here.</div>
+  <div class="row" id="resListRow" hidden><button class="btn" id="loadResList">📋 Add research list</button><select id="resWeek" style="flex:none;width:120px"></select></div>
+  <div class="row"><button class="btn" id="clearChecked">Clear checked</button><button class="btn danger" id="clearAll">Clear all</button></div>
+</section>
+</main>
+
+<footer class="note">General wellness guidance, not medical advice. Check with your doctor or a registered dietitian for personal needs. Nutrition data: <a href="https://world.openfoodfacts.org" target="_blank" rel="noopener">Open Food Facts</a> (ODbL) or your own entries.</footer>
+
+<nav class="tabs">
+  <button data-tab="today" class="active"><span>🏠</span>Home</button>
+  <button data-tab="progress"><span>📈</span>Progress</button>
+  <button data-tab="plan"><span>🗓️</span>Plan</button>
+  <button data-tab="grocery"><span>🛒</span>Grocery</button>
+</nav>
+
+<dialog id="settings">
+  <form method="dialog" class="dlg">
+    <h2>More</h2>
+    <button class="btn big" type="button" id="editProfileBtn">👤 Profile & 🚫 allergies</button>
+    <div class="row2"><label>Daily minimum kcal (optional)<input id="targetMinInput" inputmode="numeric" placeholder="e.g. 1800"></label><label>Daily maximum kcal (optional)<input id="targetInput" inputmode="numeric" placeholder="e.g. 2600"></label></div>
+    <button class="btn big" type="button" id="guideBtn">🫒 Mediterranean guide & research queue</button>
+    <button class="btn big" type="button" id="quizBtn">📝 Take / retake questionnaire</button>
+    <div class="row"><button class="btn" type="button" id="exportBtn">⬇️ Export backup</button><label class="btn file-btn">⬆️ Import backup<input type="file" accept="application/json,.json" id="importFile" hidden></label></div>
+    <div class="row2"><label>Water target (cups/day)<input id="waterTargetInput" inputmode="numeric" placeholder="e.g. 8"></label><label>Extra cups on field days<input id="waterFieldInput" inputmode="numeric" placeholder="e.g. 4"></label></div>
+    <label>My meal interval (hours, used until research timing arrives)<input id="intervalInput" inputmode="decimal" placeholder="e.g. 4"></label>
+    <label class="check"><input type="checkbox" id="notifyInput"> Notify me when next meal is due (while the app is open or recently used)</label>
+    <button class="btn" type="button" id="installBtn">📲 Install app</button>
+    <div id="installHelp" class="sub" hidden>Chrome: tap <b>⋮</b> → <b>Install app</b> / <b>Add to Home screen</b>. iPhone Safari: Share ⬆️ → <b>Add to Home Screen</b>.</div>
+    <div class="sub" id="dataInfo"></div>
+    <div class="row"><button class="btn primary" value="close" id="saveSettings">Done</button></div>
+  </form>
+</dialog>
+<div class="toast" id="toast" hidden></div>
+
+<script src="vendor/zxing.min.js" defer></script>
+<script src="app.js?v=1" defer></script>
+<script>if('serviceWorker' in navigator && location.protocol!=='file:') navigator.serviceWorker.register('sw.js?v=1');</script>
+</body>
+</html>
