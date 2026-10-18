@@ -25,6 +25,9 @@ for (const it of incoming) {
   if (item.needsSwap) item.researchTask = 'Write a same-type swap entry in alternatives.json with fromOffCategories matching offCategories';
   seen.set(b, item); queue.items.push(item); added++;
 }
+// pass the user's store through so research can check that store's stock
+const store = inp.profile && inp.profile.store ? inp.profile.store : (inp.store || null);
+if (store) { queue.userStore = store; for (const it of queue.items) if (it.status === 'pending') it.store = store; }
 queue.updatedAt = new Date().toISOString();
 fs.writeFileSync(outFile, JSON.stringify(queue, null, 2));
 console.log(`added ${added}, updated ${updated}, skipped ${skipped} (duplicate/invalid), total ${queue.items.length} -> ${outFile}`);

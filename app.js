@@ -123,6 +123,22 @@ function resolveSwapQueue() {
   for (const q of S.queue || []) if (q.needsSwap) { const m = mapProduct(q.offCategories || [], q.name); if (swapsFor({ name: q.name, cats: q.offCategories, foodId: m.food && m.food.id })) { q.needsSwap = false; q.swapResolvedAt = new Date().toISOString(); n++; } }
   if (n) { save('queue'); toast(`🔁 Research found swaps for ${n} scanned product${n === 1 ? '' : 's'}`); }
 }
+// research field: walmartItemId (string/number) on alternatives, ingredients, backups or foods
+function walmartIdOf(x) { if (!x) return null; if (x.walmartItemId) return String(x.walmartItemId); const f = x.foodId && R.foodById && R.foodById[x.foodId]; return f && f.walmartItemId ? String(f.walmartItemId) : null; }
+function groceryWalmartId(g) { if (g.walmartItemId) return String(g.walmartItemId); const n = String(g.name || g.text || '').toLowerCase(); const f = R.foods.find(f => f.walmartItemId && (f.name.toLowerCase() === n || (f.aliases || []).some(a => a.toLowerCase() === n))); return f ? String(f.walmartItemId) : null; }
+const isWalmart = () => { const s = myStore(); return !!(s && /wal-?mart/i.test(s.chain)); };
+function walmartCartUrl() { const ids = S.grocery.filter(g => !g.done).map(groceryWalmartId).filter(Boolean); const uniq = [...new Set(ids)]; return uniq.length ? { url: 'https://affil.walmart.com/cart/addToCart?items=' + uniq.map(id => encodeURIComponent(id) + '|1').join(','), n: uniq.length } : null; }
+const walmartFindUrl = g => { const id = groceryWalmartId(g); return id ? 'https://www.walmart.com/ip/' + encodeURIComponent(id) : 'https://www.walmart.com/search?q=' + encodeURIComponent(g.name || g.text); };
+function renderWalmart() {
+  const box = $('#walmartBox'); if (!box) return; box.hidden = !isWalmart(); if (!isWalmart()) return;
+  const c = walmartCartUrl(), unchecked = S.grocery.filter(g => !g.done).length;
+  if (!c) { box.innerHTML = `<div class="sub">🛒 ${unchecked ? 'Research is matching your items to Walmart products. The cart button appears once items have a Walmart product match.' : 'Add items to your list to send them to your Walmart cart.'}</div>`; return; }
+  const off = !navigator.onLine;
+  box.innerHTML = `<a class="btn primary big walmart-cart${off ? ' disabled' : ''}" id="walmartCart" href="${off ? '#' : esc(c.url)}" target="_blank" rel="noopener"${off ? ' aria-disabled="true"' : ''}>🛒 Add to my Walmart cart (${c.n} item${c.n === 1 ? '' : 's'})</a>
+    <div class="sub">${off ? '📴 You\u2019re offline. The Walmart cart link needs a connection.' : `Opens Walmart and adds 1 of each matched item to your cart. Review quantities and check out in Walmart yourself.${c.n < unchecked ? ` ${unchecked - c.n} item${unchecked - c.n === 1 ? '' : 's'} not matched yet; use 🔎 Find at Walmart.` : ''}`}</div>`;
+}
+window.addEventListener('online', () => renderWalmart()); window.addEventListener('offline', () => renderWalmart());
+document.addEventListener('click', e => { const w = e.target.closest('#walmartCart.disabled'); if (w) { e.preventDefault(); toast('The Walmart cart link needs a connection. Try again when you\u2019re online.'); } });
 const SWAPSETS = []; let lastScanned = null;
 function dinnerDayOptions() {
   const days = planDaysAhead().slice(0, 7); if (!days.length) return `<option value="${dayKey(new Date())}">Today</option>`;
@@ -145,7 +161,7 @@ function swapsHTML(ctx) {
   const sid = SWAPSETS.push(sw.items) - 1, storeId = ctx.storeItemId || '';
   return `<div class="swaps" data-sid="${sid}"><b>🔁 Better swaps</b>${sw.kind === 'group' ? `<div class="sub">Better-rated ${esc(sw.from)} from your research list</div>` : (sw.from ? `<div class="sub">Instead of ${esc(sw.from)}</div>` : '')}
   <div class="swap-ask">Want to swap? Add one to your grocery list.</div>
-  <ul>${sw.items.map((a, i) => `<li><b>${esc(String(a.name || (a.food && a.food.name) || '').replace(/\s*\(meal '[^']*'\)\s*$/, ''))}</b>${a.food && a.food.rating && !a.mealId && !(a.ingredients && a.ingredients.length) ? ` <span class="tag rate-${a.food.rating}">${RATING[a.food.rating]}</span>` : ''}${a.why ? `<div>${esc(a.why)}</div>` : ''}${a.lookFor ? `<div class="look">🔎 Look for: ${esc(a.lookFor)}</div>` : ''}<div class="src">${evBadge(a)} ${srcLinks(a.sources)}</div>
+  <ul>${sw.items.map((a, i) => `<li><b>${esc(String(a.name || (a.food && a.food.name) || '').replace(/\s*\(meal '[^']*'\)\s*$/, ''))}</b>${a.food && a.food.rating && !a.mealId && !(a.ingredients && a.ingredients.length) ? ` <span class="tag rate-${a.food.rating}">${RATING[a.food.rating]}</span>` : ''}${a.why ? `<div>${esc(a.why)}</div>` : ''}${a.lookFor ? `<div class="look">🔎 Look for: ${esc(a.lookFor)}</div>` : ''}<div class="src">${evBadge(a)} ${srcLinks(a.sources)}</div>${availHTML(a)}
   ${ctx.store && isHomemade(a) ? `<label class="swap-day">Cook it for dinner on <select data-i="${i}">${dinnerDayOptions()}</select></label>` : ''}<button type="button" class="btn swap-add" data-i="${i}">${ctx.store && isHomemade(a) ? '🍳 Make it for dinner + add to list' : '➕ Add to grocery list'}</button>${storeId ? `<button type="button" class="btn primary swap-it" data-i="${i}" data-item="${esc(storeId)}">🔁 Swap it: take this off my list, add the alternative</button>` : ''}</li>`).join('')}</ul></div>`;
 }
 const swapBlocked = x => (x.allergens || []).map(normAllergen).some(a => userAllergens().includes(a)) || (x.foodId ? foodBlocked(R.foodById[x.foodId]) : false) || excluded(x.name);
@@ -157,7 +173,7 @@ function swapGroceryItems(a) {
   for (const it of ings) {
     let pick = it; const backs = (it.backups || it.substitutes || []).filter(b => !swapBlocked(b));
     if (swapBlocked(it)) { pick = backs.shift(); if (!pick) continue; }
-    out.push({ name: pick.name, substitutedFor: pick === it ? null : it.name, amount: pick === it ? it.amount ?? null : null, unit: pick === it ? it.unit || '' : '', text: pick.name + (pick === it && pick.amount != null ? ' — ' + pick.amount + (pick.unit ? ' ' + pick.unit : '') : ''), backups: backs.filter(b => b !== pick).map(b => b.name) });
+    out.push({ walmartItemId: walmartIdOf(pick), availability: pick.availability || null, backupObjs: backs.filter(b => b !== pick).map(b => ({ name: b.name, availability: b.availability || null })), name: pick.name, substitutedFor: pick === it ? null : it.name, amount: pick === it ? it.amount ?? null : null, unit: pick === it ? it.unit || '' : '', text: pick.name + (pick === it && pick.amount != null ? ' — ' + pick.amount + (pick.unit ? ' ' + pick.unit : '') : ''), backups: backs.filter(b => b !== pick).map(b => b.name) });
   }
   return out;
 }
@@ -168,7 +184,7 @@ async function saveToCook(a, source, plannedDay, slot) {
   const mealId = a.mealId || null, name = String((meal && meal.name) || a.name || '').replace(/\s*\(meal '[^']*'\)\s*$/, '');
   if (S.toCook.some(t => (mealId ? t.mealId === mealId : t.name === name) && (t.plannedDay || null) === (plannedDay || null) && (t.slot || null) === (slot || null))) return false;
   const steps = (meal && Array.isArray(meal.steps) ? meal.steps : Array.isArray(a.steps) ? a.steps : []).filter(x => typeof x === 'string');
-  const ings = swapGroceryItems(a).filter(i => i.name).map(i => ({ name: i.name, amount: i.amount, unit: i.unit, backups: i.backups || [], substitutedFor: i.substitutedFor || null }));
+  const ings = swapGroceryItems(a).filter(i => i.name).map(i => ({ name: i.name, amount: i.amount, unit: i.unit, backups: i.backups || [], substitutedFor: i.substitutedFor || null, availability: i.availability || null, backupObjs: i.backupObjs || [] }));
   S.toCook.push({ id: uid(), mealId, name, ingredients: ings, steps, addedAt: new Date().toISOString(), plannedDay: plannedDay || null, slot: slot || null, source });
   await save('toCook'); return true;
 }
@@ -212,7 +228,7 @@ function openCook(id) {
   const meal = t.mealId && mealById(t.mealId), nut = meal && meal.nutritionApprox;
   $('#cookBody').innerHTML = `<h2>${esc(t.name)}</h2>
     <h3>Ingredients</h3><ul class="cook-ings">${t.ingredients.map(i => { const st = boughtState(i);
-      return `<li class="${st === 'bought' ? 'got' : ''}"><span>${esc(i.name)}${i.amount != null ? ' — ' + esc(r1(i.amount)) + (i.unit ? ' ' + esc(i.unit) : '') : ''}</span><span class="st">${st === 'bought' ? '✓ bought' : 'not bought yet'}</span>${i.gotBackup ? `<div class="sub">✓ Got backup: ${esc(i.gotBackup)}${i.boughtProduct ? ' (' + esc(i.boughtProduct) + ')' : ''}</div>` : ''}${i.substitutedFor ? `<div class="sub">Backup used instead of ${esc(i.substitutedFor)} (your allergy list)</div>` : ''}${i.backups.length ? `<div class="sub">If out: ${i.backups.map(esc).join(' or ')}</div>` : ''}</li>`; }).join('') || '<li class="sub">No ingredient list from research.</li>'}</ul>
+      return `<li class="${st === 'bought' ? 'got' : ''}"><span>${esc(i.name)}${i.amount != null ? ' — ' + esc(r1(i.amount)) + (i.unit ? ' ' + esc(i.unit) : '') : ''}</span><span class="st">${st === 'bought' ? '✓ bought' : 'not bought yet'}</span>${i.gotBackup ? `<div class="sub">✓ Got backup: ${esc(i.gotBackup)}${i.boughtProduct ? ' (' + esc(i.boughtProduct) + ')' : ''}</div>` : ''}${i.substitutedFor ? `<div class="sub">Backup used instead of ${esc(i.substitutedFor)} (your allergy list)</div>` : ''}${i.backups.length ? `<div class="sub">If out: ${i.backups.map(esc).join(' or ')}</div>` : ''}${availHTML(i, i.backupObjs)}</li>`; }).join('') || '<li class="sub">No ingredient list from research.</li>'}</ul>
     <h3>Steps</h3>${t.steps.length ? `<ol class="cook-steps">${t.steps.map(x => `<li>${esc(x)}</li>`).join('')}</ol>` : '<div class="sub">Research has no steps for this one yet.</div>'}
     ${nut && nut.kcal != null ? `<div class="sub">About ${esc(nut.kcal)} kcal per serving · research nutrition${meal.evidence ? ' · ' + esc(meal.evidence) + ' evidence' : ''}</div>${srcLinks(meal.sources)}` : ''}
     <div class="cook-actions"><button class="btn primary big" id="cookDone" data-id="${t.id}">✅ Mark as cooked</button><button class="btn big" id="cookRemove" data-id="${t.id}">Remove</button><button class="btn big" id="cookClose">Close</button></div>`;
@@ -239,7 +255,7 @@ async function addSwapToGrocery(a, removeId, opts = {}) {
   for (const it of swapGroceryItems(a)) {
     if (!it.name) continue;
     if (S.grocery.some(g => !g.done && (g.name || g.text).toLowerCase() === it.name.toLowerCase())) { dup++; continue; }
-    S.grocery.push({ id: uid(), text: it.text, name: it.name, backups: it.backups, done: false, from: 'swap' }); added++;
+    S.grocery.push({ id: uid(), text: it.text, name: it.name, backups: it.backups, availability: it.availability || null, backupObjs: it.backupObjs || [], walmartItemId: it.walmartItemId || null, done: false, from: 'swap' }); added++;
   }
   let cooked = false;
   if (isHomemade(a) && opts.dinnerDay) { await planDinner(a.mealId, opts.dinnerDay); cooked = await saveToCook(a, 'store', opts.dinnerDay, 'dinner'); }
@@ -287,6 +303,7 @@ function fillProfile() {
   $$('.goals input').forEach(c => c.checked = p.goals ? p.goals.includes(c.value) : c.value === 'eat-more-mediterranean');
   $('#pfGoalsText').value = p.goalsText || ''; $$('#pfAllergens button').forEach(b => b.classList.toggle('on', (p.allergies || []).includes(b.dataset.al))); $('#pfAvoid').value = (p.avoidFoods || []).join(', ');
   $('#pfTarget').value = p.calorieTarget ?? S.settings.targetMin ?? '';
+  const st = p.store || {}; $('#pfStoreChain').value = st.chain || ''; $('#pfStoreCity').value = st.city || ''; $('#pfStoreState').value = st.state || ''; $('#pfStoreInStore').checked = st.inStoreOnly !== false;
   $('#pfCancel').hidden = !S.profile; $('#pfErr').textContent = '';
 }
 $('#profileForm').onsubmit = async e => {
@@ -303,14 +320,27 @@ $('#profileForm').onsubmit = async e => {
   if (errs.length) { $('#pfErr').textContent = 'Please fill in: ' + errs.join(', '); return; }
   const p = { sex: $('#pfSex').value, birthDate, ageYears: null, heightCm: r1(heightCm), weightKg: r1(weightKg), activityLevel: $('#pfAct').value || null,
     goals: $$('.goals input:checked').map(c => c.value), goalsText: $('#pfGoalsText').value.trim(), allergies: $$('#pfAllergens button.on').map(b => b.dataset.al), avoidFoods: csv($('#pfAvoid').value),
-    calorieTarget: num($('#pfTarget').value), updatedAt: new Date().toISOString() };
+    calorieTarget: num($('#pfTarget').value), store: readStore(), updatedAt: new Date().toISOString() };
   p.ageYears = birthDate ? ageFrom(p) : Math.round(ageIn);
   const first = !S.profile; S.profile = p; if (p.calorieTarget) S.settings.targetMin = p.calorieTarget; await save('profile', 'settings');
   toast('Profile saved on this phone'); if (first && R.quiz && !S.quiz) { renderQuiz(); show('quiz'); } else show('today');
 };
 $('#pfCancel').onclick = () => show('today');
 $('#editProfileBtn').onclick = () => { $('#settings').close(); fillProfile(); show('profile'); };
-function exportProfile() { const p = S.profile; if (!p) return null; return { sex: p.sex, birthDate: p.birthDate, ageYears: ageFrom(p), heightCm: p.heightCm, weightKg: p.weightKg, activityLevel: p.activityLevel, goals: p.goals || [], goalsText: p.goalsText || '', allergies: p.allergies || [], avoidFoods: p.avoidFoods || [], calorieTarget: p.calorieTarget ?? null, updatedAt: p.updatedAt }; }
+const slug = x => String(x || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+function readStore() { const chain = $('#pfStoreChain').value.trim(), city = $('#pfStoreCity').value.trim(), state = $('#pfStoreState').value.trim().toUpperCase(); if (!chain) return null; return { chain, city, state, inStoreOnly: $('#pfStoreInStore').checked, key: storeKey({ chain, city, state }) }; }
+const storeKey = st => st && st.chain ? [slug(st.chain), slug(st.city), slug(st.state)].join('|') : '';
+const myStore = () => (S.profile && S.profile.store && S.profile.store.chain) ? S.profile.store : null;
+// research availability shape: obj.availability = { "<storeKey>": { inStock: bool, checkedOn: "YYYY-MM-DD", price: number|string? } }
+function storeAvail(obj) { const st = myStore(); if (!st || !obj || !obj.availability) return null; const k = st.key || storeKey(st); return obj.availability[k] || obj.availability[slug(st.chain)] || null; }
+function availHTML(obj, backups) {
+  const a = storeAvail(obj); if (!a || typeof a.inStock !== 'boolean') return '';
+  const when = a.checkedOn ? ` (checked ${esc(fmtDay(fromKey(String(a.checkedOn).slice(0, 10))).split(',').slice(0, 2).join(','))})` : '';
+  if (a.inStock) return `<div class="avail ok">✓ at your store${a.price != null && a.price !== '' ? ' · ' + esc(typeof a.price === 'number' ? '$' + a.price.toFixed(2) : a.price) : ''}${when}</div>`;
+  const alt = (backups || []).find(b => { const x = storeAvail(b); return x && x.inStock; }) || (backups || [])[0];
+  return `<div class="avail no">Not at your store${when}${alt ? ', try: ' + esc(alt.name || alt) : ''}</div>`;
+}
+function exportProfile() { const p = S.profile; if (!p) return null; return { sex: p.sex, birthDate: p.birthDate, ageYears: ageFrom(p), heightCm: p.heightCm, weightKg: p.weightKg, activityLevel: p.activityLevel, goals: p.goals || [], goalsText: p.goalsText || '', store: p.store || null, allergies: p.allergies || [], avoidFoods: p.avoidFoods || [], calorieTarget: p.calorieTarget ?? null, updatedAt: p.updatedAt }; }
 
 /* ---------- entries / today ---------- */
 let viewDay = startOfDay(new Date());
@@ -916,10 +946,11 @@ $('#planToGrocery').onclick = async () => {
 
 /* ---------- grocery ---------- */
 function renderGrocery() {
+  const ms = myStore(), sl = $('#myStoreLine'); if (sl) { sl.hidden = !ms; if (ms) sl.textContent = `🏪 ${ms.chain}${ms.city ? ', ' + ms.city : ''}${ms.state ? ', ' + ms.state : ''}${ms.inStoreOnly ? ' · in-store only' : ''}`; }
   const GL = R.groceryLists, weeks = GL && Array.isArray(GL.weeks) ? GL.weeks : [];
   $('#resListRow').hidden = !weeks.length; if (weeks.length && !$('#resWeek').options.length) $('#resWeek').innerHTML = weeks.map(w => `<option value="${w.week}">Week ${w.week}</option>`).join('');
-  $('#groceryList').innerHTML = S.grocery.map(g => `<li class="${g.done ? 'done' : ''}" data-id="${g.id}"><input type="checkbox"${g.done ? ' checked' : ''} aria-label="Got it"><span class="txt">${esc(g.text)}${g.backups && g.backups.length ? `<span class="backup">If out: ${g.backups.map(esc).join(' or ')}</span>` : ''}</span><button aria-label="Remove">✕</button></li>`).join('');
-  $('#groceryEmpty').hidden = S.grocery.length > 0;
+  $('#groceryList').innerHTML = S.grocery.map(g => `<li class="${g.done ? 'done' : ''}" data-id="${g.id}"><input type="checkbox"${g.done ? ' checked' : ''} aria-label="Got it"><span class="txt">${esc(g.text)}${g.backups && g.backups.length ? `<span class="backup">If out: ${g.backups.map(esc).join(' or ')}</span>` : ''}${availHTML(g, g.backupObjs)}${isWalmart() ? `<a class="find-wm" href="${esc(walmartFindUrl(g))}" target="_blank" rel="noopener">🔎 Find at Walmart</a>` : ''}</span><button aria-label="Remove">✕</button></li>`).join('');
+  $('#groceryEmpty').hidden = S.grocery.length > 0; renderWalmart();
 }
 $('#groceryForm').onsubmit = async e => { e.preventDefault(); const t = $('#groceryInput').value.trim(); if (!t) return; S.grocery.push({ id: uid(), text: t, name: t, done: false }); $('#groceryInput').value = ''; await save('grocery'); renderGrocery(); };
 $('#groceryList').onclick = async e => { const li = e.target.closest('li'); if (!li) return; const g = S.grocery.find(x => x.id === li.dataset.id); if (e.target.tagName === 'BUTTON') S.grocery = S.grocery.filter(x => x !== g); else if (e.target.type === 'checkbox' || e.target.classList.contains('txt')) g.done = !g.done; await save('grocery'); renderGrocery(); };
@@ -986,7 +1017,7 @@ $('#installBtn').onclick = async () => { if (deferredPrompt) { deferredPrompt.pr
   if (!S.profile) { fillProfile(); show('profile'); } else show('today');
   resolvePending();
   document.addEventListener('visibilitychange', async () => { if (document.visibilityState === 'visible' && navigator.onLine) { await loadResearch(); if (curTab !== 'add' && curTab !== 'profile' && curTab !== 'quiz') show(curTab); } });
-  window.__fl = { mainFoods, mealById, library, S, R, save, show, weeklyExport, offLookup, parseLabel, lookupAndOpen, storeCheck, ensurePlan, addSwapToGrocery, markScannedForToCook, planDaysAhead, saveToCook, renderToCook, tonightItem, dinnerHour, resolveSwapQueue, swapsFor };
+  window.__fl = { mainFoods, mealById, library, S, R, save, show, weeklyExport, offLookup, parseLabel, lookupAndOpen, storeCheck, ensurePlan, addSwapToGrocery, walmartCartUrl, renderGrocery, storeKey, availHTML, exportProfile, markScannedForToCook, planDaysAhead, saveToCook, renderToCook, tonightItem, dinnerHour, resolveSwapQueue, swapsFor };
 })();
 
 /* ---------- resolve offline-queued barcodes when back online ---------- */
