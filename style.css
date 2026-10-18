@@ -271,3 +271,5 @@ details.cite[open]{display:block;width:100%;background:#f6f8f4;border-radius:8px
 #pickSearch{width:100%;min-height:50px;font-size:17px;margin:8px 0}#pickFilters button.on{background:#3f7d4e;color:#fff}#pickFilters select{min-height:44px}
 .pick-list{list-style:none;padding:0;margin:8px 0 0}.pick-row{display:block;width:100%;text-align:left;min-height:60px;padding:10px 12px;margin-bottom:8px;border:1px solid #d6e4d8;border-radius:14px;background:#fff;font-size:16px}.pick-row .nm{display:block;font-weight:600}.pick-row .sub{display:block}.pick-h{margin:12px 0 6px;font-weight:700}
 .undo-btn{margin-left:10px;padding:8px 14px;border-radius:10px;border:0;background:#fff;color:#1f2937;font-weight:700;min-height:40px}
+.pantry-nudge{border-left:6px solid #d97706;display:grid;gap:8px}.pantry-nudge .pn-rec{min-height:54px;width:100%;text-align:left;font-size:16px}.pantry-nudge .row{display:grid;grid-template-columns:1fr 1fr;gap:8px}.pantry-nudge .row .btn{min-height:48px}
+.pantry-list li{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:52px}.pantry-list .rm-p{min-width:48px;min-height:48px}

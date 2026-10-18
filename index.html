@@ -71,6 +71,7 @@
 <!-- TODAY -->
 <section class="screen" id="s-today">
   <div id="homeAlerts"></div>
+  <div id="pantryNudgeBox"></div>
   <div id="tonightCard" hidden></div>
   <div class="card" id="toCookCard" hidden></div>
   <div class="card timer-card">
@@ -272,6 +273,7 @@
   <div class="card walmart" id="walmartBox" hidden></div>
   <form class="row" id="groceryForm"><input id="groceryInput" placeholder="Add an item…" autocomplete="off"><button class="btn primary">Add</button></form>
   <ul class="grocery" id="groceryList"></ul>
+  <details class="card" id="pantryCard"><summary><b>🥫 My pantry <span id="pantryCount"></span></b><div class="sub">What you have on hand and when you last used it.</div></summary><ul class="grocery pantry-list" id="pantryList"></ul></details>
   <div class="empty" id="groceryEmpty">Your list is empty. Add items above or send your meal plan here.</div>
   <div class="row" id="resListRow" hidden><button class="btn" id="loadResList">📋 Add research list</button><select id="resWeek" style="flex:none;width:120px"></select></div>
   <div class="row"><button class="btn" id="clearChecked">Clear checked</button><button class="btn danger" id="clearAll">🗑️ Remove all</button></div>
