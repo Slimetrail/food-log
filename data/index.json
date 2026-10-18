@@ -1,16 +1,16 @@
 {
- "version": "57cbfd6c4d",
- "updatedAt": "2026-10-18T03:14:38.300Z",
+ "version": "d01a56ba03",
+ "updatedAt": "2026-10-18T10:08:32.979Z",
  "files": {
   "foods.json": {
    "version": "2026-10-17",
-   "revision": null,
-   "bytes": 349197
+   "revision": 2,
+   "bytes": 352615
   },
   "meals.json": {
    "version": "2026-10-17",
-   "revision": null,
-   "bytes": 378012
+   "revision": 2,
+   "bytes": 385731
   },
   "groups.json": {
    "version": "2026-10-17",
@@ -29,8 +29,8 @@
   },
   "alternatives.json": {
    "version": "2026-10-17",
-   "revision": null,
-   "bytes": 31769
+   "revision": 2,
+   "bytes": 50681
   },
   "questionnaire.json": {
    "version": "2026-10-17",

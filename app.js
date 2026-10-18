@@ -92,14 +92,19 @@ function ratingFor(foodId, group) {
 
 /* ---------- Better swaps ---------- */
 const RANK = { 'eat-freely': 0, 'moderation': 1, 'limit': 2 };
-function swapsFor({ cats, foodId, group, nova }) {
+const NAME_FALLBACKS = [{ fromFoodId: 'boxed-macaroni-and-cheese', re: /mac(aroni)?\s*(&|and|n'?)\s*cheese/i }]; // TEMP until research adds fromNamePatterns
+function swapsFor({ cats, foodId, group, nova, name }) {
   cats = (cats || []).map(c => String(c).toLowerCase());
   let best = null, bestPos = -2;
   for (const sw of R.swaps) {
     if (foodId && sw.fromFoodId && sw.fromFoodId === foodId && bestPos < 1e6) { best = sw; bestPos = 1e6; continue; }
     for (const oc of (sw.fromOffCategories || [])) { const p = cats.indexOf(String(oc).toLowerCase()); if (p > bestPos && p >= 0) { bestPos = p; best = sw; } }
   }
-  if (best) { const items = (best.alternatives || []).filter(hasSrc).filter(a => !(a.foodId ? foodBlocked(R.foodById[a.foodId]) : excluded(a.name))).map(a => ({ ...a, food: a.foodId && R.foodById[a.foodId] })); if (items.length) return { kind: 'research', from: best.fromDescription || '', items }; }
+  if (!best && name) {
+    best = R.swaps.find(sw => (sw.fromNamePatterns || []).some(p => { try { return new RegExp(p, 'i').test(name); } catch { return false; } })) || null;
+    if (!best) { const fb = NAME_FALLBACKS.find(f => f.re.test(name)); if (fb) best = R.swaps.find(sw => sw.fromFoodId === fb.fromFoodId) || null; }
+  }
+  if (best) { const items = (best.alternatives || []).filter(hasSrc).filter(a => !swapBlocked(a)).map(a => ({ ...a, food: a.foodId && R.foodById[a.foodId] })); if (items.length) return { kind: 'research', from: best.fromDescription || '', items }; }
   const cf = foodId && R.foodById[foodId];
   if (cf && Array.isArray(cf.swapTo) && cf.swapTo.length) { const items = cf.swapTo.map(id => R.foodById[id]).filter(f => f && hasSrc(f) && !foodBlocked(f)).map(f => ({ foodId: f.id, name: f.name, why: f.notes || '', lookFor: '', sources: f.sources, evidence: f.evidence, food: f })); if (items.length) return { kind: 'research', from: cf.name, items }; }
   return null;
@@ -115,7 +120,7 @@ async function queueSwapNeed(p, ctx) {
 }
 function resolveSwapQueue() {
   if (!R.swaps.length && !R.foods.length) return; let n = 0;
-  for (const q of S.queue || []) if (q.needsSwap) { const m = mapProduct(q.offCategories || [], q.name); if (swapsFor({ cats: q.offCategories, foodId: m.food && m.food.id })) { q.needsSwap = false; q.swapResolvedAt = new Date().toISOString(); n++; } }
+  for (const q of S.queue || []) if (q.needsSwap) { const m = mapProduct(q.offCategories || [], q.name); if (swapsFor({ name: q.name, cats: q.offCategories, foodId: m.food && m.food.id })) { q.needsSwap = false; q.swapResolvedAt = new Date().toISOString(); n++; } }
   if (n) { save('queue'); toast(`🔁 Research found swaps for ${n} scanned product${n === 1 ? '' : 's'}`); }
 }
 const SWAPSETS = []; let lastStoreItem = null;
@@ -130,19 +135,19 @@ function swapsHTML(ctx) {
   const sid = SWAPSETS.push(sw.items) - 1, storeId = ctx.storeItemId || '';
   return `<div class="swaps" data-sid="${sid}"><b>🔁 Better swaps</b>${sw.kind === 'group' ? `<div class="sub">Better-rated ${esc(sw.from)} from your research list</div>` : (sw.from ? `<div class="sub">Instead of ${esc(sw.from)}</div>` : '')}
   <div class="swap-ask">Want to swap? Add one to your grocery list.</div>
-  <ul>${sw.items.map((a, i) => `<li><b>${esc(a.name || (a.food && a.food.name) || '')}</b>${a.food && a.food.rating ? ` <span class="tag rate-${a.food.rating}">${RATING[a.food.rating]}</span>` : ''}${a.why ? `<div>${esc(a.why)}</div>` : ''}${a.lookFor ? `<div class="look">🔎 Look for: ${esc(a.lookFor)}</div>` : ''}<div class="src">${evBadge(a)} ${srcLinks(a.sources)}</div>
+  <ul>${sw.items.map((a, i) => `<li><b>${esc(String(a.name || (a.food && a.food.name) || '').replace(/\s*\(meal '[^']*'\)\s*$/, ''))}</b>${a.food && a.food.rating && !a.mealId && !(a.ingredients && a.ingredients.length) ? ` <span class="tag rate-${a.food.rating}">${RATING[a.food.rating]}</span>` : ''}${a.why ? `<div>${esc(a.why)}</div>` : ''}${a.lookFor ? `<div class="look">🔎 Look for: ${esc(a.lookFor)}</div>` : ''}<div class="src">${evBadge(a)} ${srcLinks(a.sources)}</div>
   <button type="button" class="btn swap-add" data-i="${i}">➕ Add to grocery list</button>${storeId ? `<button type="button" class="btn primary swap-it" data-i="${i}" data-item="${esc(storeId)}">🔁 Swap it: take this off my list, add the alternative</button>` : ''}</li>`).join('')}</ul></div>`;
 }
-const swapBlocked = x => (x.allergens || []).map(normAllergen).some(a => userAllergens().includes(a)) || (x.foodId ? foodBlocked(R.foodById[x.foodId]) : excluded(x.name));
+const swapBlocked = x => (x.allergens || []).map(normAllergen).some(a => userAllergens().includes(a)) || (x.foodId ? foodBlocked(R.foodById[x.foodId]) : false) || excluded(x.name);
 function swapGroceryItems(a) {
   const meal = a.mealId && typeof mealById === 'function' ? mealById(a.mealId) : null;
   const ings = Array.isArray(a.ingredients) && a.ingredients.length ? a.ingredients : (meal && Array.isArray(meal.ingredients) && meal.ingredients.length ? meal.ingredients : null);
   if (!ings) return [{ name: a.name || (a.food && a.food.name), text: a.name || (a.food && a.food.name), backups: [] }];
   const out = [];
   for (const it of ings) {
-    let pick = it; const backs = (it.backups || []).filter(b => !swapBlocked(b));
+    let pick = it; const backs = (it.backups || it.substitutes || []).filter(b => !swapBlocked(b));
     if (swapBlocked(it)) { pick = backs.shift(); if (!pick) continue; }
-    out.push({ name: pick.name, text: pick.name + (pick.amount ? ' — ' + pick.amount : ''), backups: backs.filter(b => b !== pick).map(b => b.name) });
+    out.push({ name: pick.name, text: pick.name + (pick === it && pick.amount != null ? ' — ' + pick.amount + (pick.unit ? ' ' + pick.unit : '') : ''), backups: backs.filter(b => b !== pick).map(b => b.name) });
   }
   return out;
 }
@@ -318,7 +323,7 @@ $('#entries').onclick = async ev => {
   const e = S.entries.find(x => x.id === li.dataset.id); if (!e) return;
   if (b.dataset.act === 'del') { if (!confirm('Delete "' + e.name + '"?')) return; S.entries = S.entries.filter(x => x !== e); await save('entries'); renderToday(); }
   else if (b.dataset.act === 'edit') { show('add'); openFoodForm(e, { editId: e.id }); }
-  else if (b.dataset.act === 'swap') { const slot = li.querySelector('.sw-slot'); slot.innerHTML = slot.innerHTML ? '' : (swapsHTML({ cats: e.categories, foodId: e.foodId, group: e.group, nova: e.nova }) || '<div class="swaps"><b>🔁 Better swaps</b><div class="sub">No better-rated alternative in your research data for this one.</div></div>'); }
+  else if (b.dataset.act === 'swap') { const slot = li.querySelector('.sw-slot'); slot.innerHTML = slot.innerHTML ? '' : (swapsHTML({ name: e.name, cats: e.categories, foodId: e.foodId, group: e.group, nova: e.nova }) || '<div class="swaps"><b>🔁 Better swaps</b><div class="sub">No better-rated alternative in your research data for this one.</div></div>'); }
 };
 $('#prevDay').onclick = () => { viewDay = addDays(viewDay, -1); renderToday(); };
 $('#nextDay').onclick = () => { viewDay = addDays(viewDay, 1); renderToday(); };
@@ -463,7 +468,7 @@ function openFoodForm(entry, opts = {}) {
   $('#ffSocial').checked = !!entry.social;
   $('#ffFav').checked = S.favorites.some(f => favKey(f) === favKey(entry));
   let sw = f.querySelector('.swaps'); if (sw) sw.remove();
-  f.querySelector('.total-line').insertAdjacentHTML('beforebegin', swapsHTML({ cats: entry.categories, foodId: entry.foodId, group: entry.group, nova: entry.nova, product: entry.source === 'off' || entry.source === 'label' ? entry : null }));
+  f.querySelector('.total-line').insertAdjacentHTML('beforebegin', swapsHTML({ name: entry.name, cats: entry.categories, foodId: entry.foodId, group: entry.group, nova: entry.nova, product: entry.source === 'off' || entry.source === 'label' ? entry : null }));
   const missing = !entry.per || entry.per.kcal == null;
   $('#nutBox').open = missing || entry.source === 'label' || entry.source === 'manual';
   updateFF(); f.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -506,7 +511,7 @@ $('#ffBasis').onchange = () => {
   if (p) { const src = b === '100g' ? p.per100 : p.perServing; if (src) NUTS.forEach(n => $('#ff_' + n).value = src[n] ?? ''); else { NUTS.forEach(n => $('#ff_' + n).value = ''); toast('Open Food Facts has no ' + (b === '100g' ? 'per-100 g' : 'per-serving') + ' values for this. Enter them or switch back.', 4000); } $('#ffQty').value = b === '100g' ? '' : 1; }
   updateFF();
 };
-$('#ffGroup').onchange = $('#ffNova').onchange = () => { updateFF(); const f = $('#foodForm'); f.querySelector('.swaps')?.remove(); f.querySelector('.total-line').insertAdjacentHTML('beforebegin', swapsHTML({ cats: ff.entry.categories, foodId: ff.entry.foodId, group: $('#ffGroup').value, nova: num($('#ffNova').value), product: ff.entry.source === 'off' || ff.entry.source === 'label' ? { ...ff.entry, name: $('#ffName').value || ff.entry.name } : null })); };
+$('#ffGroup').onchange = $('#ffNova').onchange = () => { updateFF(); const f = $('#foodForm'); f.querySelector('.swaps')?.remove(); f.querySelector('.total-line').insertAdjacentHTML('beforebegin', swapsHTML({ name: $('#ffName').value || ff.entry.name, cats: ff.entry.categories, foodId: ff.entry.foodId, group: $('#ffGroup').value, nova: num($('#ffNova').value), product: ff.entry.source === 'off' || ff.entry.source === 'label' ? { ...ff.entry, name: $('#ffName').value || ff.entry.name } : null })); };
 $('#ffCancel').onclick = () => { $('#foodForm').hidden = true; ff = null; };
 $('#foodForm').onsubmit = async e => {
   e.preventDefault(); if (!ff) return;
@@ -868,7 +873,7 @@ async function storeCheck(code) {
     ${ratedBy && rating ? `<div class="src">${srcLinks(ratedBy.sources)}</div>` : ''}
     ${p.per100 ? `<div class="nut"><div><b>${n.kcal ?? '–'}</b>kcal</div><div><b>${n.sugar ?? '–'}g</b>sugar</div><div><b>${n.fiber ?? '–'}g</b>fiber</div><div><b>${n.sodium ?? '–'}mg</b>sodium</div><div><b>${n.fat ?? '–'}g</b>fat</div><div><b>${n.satfat ?? '–'}g</b>sat fat</div><div><b>${n.protein ?? '–'}g</b>protein</div><div><b>${n.carbs ?? '–'}g</b>carbs</div></div><div class="sub" style="text-align:center">per 100 g · Open Food Facts</div>` : '<div class="sub">No nutrition data on Open Food Facts.</div>'}
     ${item ? `<div class="status ok">✓ Checked off "${esc(item.text)}"</div>` : ''}${!m.food ? '<div class="sub">Added to research queue.</div>' : ''}
-    ${swapsHTML({ cats: p.categories, foodId: m.food && m.food.id, group: m.group, nova: p.nova, storeItemId: item && item.id, product: { barcode: p.code, name: p.name, brand: p.brand } })}</div>`;
+    ${swapsHTML({ name: p.name, cats: p.categories, foodId: m.food && m.food.id, group: m.group, nova: p.nova, storeItemId: item && item.id, product: { barcode: p.code, name: p.name, brand: p.brand } })}</div>`;
 }
 
 /* ---------- settings ---------- */
