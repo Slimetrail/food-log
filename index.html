@@ -293,6 +293,13 @@
 
 <dialog id="loPrompt"><form class="dlg"><h2>Servings left over?</h2><div class="stepper"><button type="button" class="step-btn" id="loMinus" aria-label="Fewer">−</button><input id="loQty" inputmode="numeric" value="0" aria-label="Servings left over"><button type="button" class="step-btn" id="loPlus" aria-label="More">+</button></div>
 <div class="slot-btns"><button class="btn primary big" id="loSave" type="button">Save</button><button class="btn big" id="loSkip" type="button">None</button></div></form></dialog>
+<dialog id="hhInvite"><div class="dlg"><h2 id="hhInviteTitle">Join household?</h2><label>Your name<input id="hhInvName" maxlength="30"></label><div class="chips" id="hhInvColors"></div>
+<div class="sub">Only your name, color, allergies, foods to avoid, phase and this week's meals are shared, and only when you send them.</div>
+<div class="slot-btns"><button class="btn primary big" id="hhInvJoin" type="button">Join</button><button class="btn big" id="hhInvNo" type="button">Not now</button></div></div></dialog>
+<dialog id="hhSendBack"><div class="dlg"><h2>You joined! 🎉</h2><div>Send your week back to <b id="hhSendBackName"></b> so you show up on their phone too.</div>
+<div class="sub" id="hhInstallHint">Tip: add Food Log to your home screen. Chrome: ⋮ → Install app. iPhone Safari: Share ⬆️ → Add to Home Screen.</div>
+<div class="slot-btns"><button class="btn primary big" id="hhSendBackBtn" type="button">📱 Send your week back</button><button class="btn big" id="hhSendBackLater" type="button">Later</button></div></div></dialog>
+<dialog id="hhLinkMsg"><div class="dlg"><p id="hhLinkMsgText"></p><button class="btn primary big" id="hhLinkMsgOk" type="button">OK</button></div></dialog>
 <dialog id="hhMeal"><div class="pick-head"><span></span><button class="btn" id="hhMealClose" type="button">Close</button></div><div id="hhMealBody"></div></dialog>
 <nav class="tabs">
   <button data-tab="today" class="active"><span>🏠</span>Home</button>

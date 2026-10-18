@@ -1046,7 +1046,7 @@ function autoFillDay(day, prev, next) {
     const opts = (day.options[slot] || []).map(mealById).filter(Boolean); if (!opts.length) continue;
     const ok = shuffle(opts).find(m => !conflict(m, day, slot, prev, next));
     const any = ok || shuffle(library().filter(m => slotOf(m) === slot)).find(m => !conflict(m, day, slot, prev, next));
-    if (any) { day.meals[slot] = any.id; if (!day.options[slot].includes(any.id)) day.options[slot].push(any.id); }
+    if (any) { day.meals[slot] = any.id; if (!day.options[slot].includes(any.id)) { if (day.options[slot].length >= 4) day.options[slot][3] = any.id; else day.options[slot].push(any.id); } }
   }
 }
 function newDays(start, n, prev) { const out = []; for (let i = 0; i < n; i++) { const d = { date: dayKey(addDays(start, i)), meals: {}, options: {} }; makeOptions(d, prev); autoFillDay(d, prev, null); out.push(d); prev = d; } return out; }
@@ -1269,7 +1269,9 @@ function renderHousehold() {
   el.innerHTML = `<div class="card"><b>👪 This week</b><div class="sub">Tap a meal to see it with that person's allergies and phase.</div><div class="hh-rows">${rows}</div></div>
     <div class="card"><div class="row between"><b>🛒 Shopping for everyone</b><div class="seg mini" id="hhView"><button type="button" class="seg-btn${view === 'merged' ? ' active' : ''}" data-v="merged">Merged</button><button type="button" class="seg-btn${view === 'person' ? ' active' : ''}" data-v="person">Per person</button></div></div>${list}
     ${cart ? `<a class="btn big walmart-cart" id="hhCart" href="${esc(cart)}" target="_blank" rel="noopener">🛒 Add to Walmart cart</a><div class="sub">Opens Walmart. Review and check out there yourself.</div>` : ''}</div>
-    <div class="card hh-actions"><button class="btn primary big" id="hhShare" type="button">📤 Share my week</button><label class="btn big file-btn">📥 Import a member's week<input type="file" id="hhFile" accept="application/json,.json" hidden></label><button class="btn big danger" id="hhLeave" type="button">Leave household</button><div class="sub">Data only leaves this phone when you tap Share. History, weight, logs and questionnaire answers are never included.</div></div>`;
+    <div class="card hh-actions"><button class="btn primary big" id="hhInviteText" type="button">📱 Invite by text</button><button class="btn big" id="hhUpdateText" type="button">📱 Send my week update</button>
+    <div id="hhLinkBox" hidden><label>Text to send<textarea id="hhLinkText" rows="3" readonly></textarea></label><div class="sub" id="hhLinkNote"></div></div>
+    <div class="sub">Backup: share as a file.</div><button class="btn big" id="hhShare" type="button">📤 Share my week (file)</button><label class="btn big file-btn">📥 Import a member's week<input type="file" id="hhFile" accept="application/json,.json" hidden></label><button class="btn big danger" id="hhLeave" type="button">Leave household</button><div class="sub">Data only leaves this phone when you tap Share. History, weight, logs and questionnaire answers are never included.</div></div>`;
 }
 function openHHMeal(mealId, memId) {
   const mem = hhAll().find(m => m.id === memId); const meal = R.meals.find(x => x.id === mealId) || mealById(mealId); if (!mem || !meal) return;
@@ -1351,6 +1353,65 @@ document.addEventListener('click', async e => {
   const mm = t.closest('[data-lo-meal]'); if (mm) { const m = mealById(mm.dataset.loMeal); if (!m) return; let tc = S.toCook.find(x => x.mealId === m.id && x.source === 'leftovers'); if (!tc) { await saveToCook({ mealId: m.id, name: m.name }, 'leftovers'); tc = S.toCook[S.toCook.length - 1]; } openCook(tc.id); }
 });
 document.addEventListener('change', async e => { if (e.target.id === 'loExact') { loExact = e.target.checked; renderLeftovers(); } if (e.target.id === 'pfLeftoverDays') { S.settings.leftoverDays = +e.target.value; await save('settings'); } });
+
+/* ---------- household invite / update by TEXT LINK (payload in the URL fragment: never sent to the server) ---------- */
+const APP_URL = 'https://slimetrail.github.io/food-log/', LINK_MAX = 2000;
+const b64u = u8 => { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); };
+const unb64u = s => { s = s.replace(/-/g, '+').replace(/_/g, '/'); while (s.length % 4) s += '='; const b = atob(s); const u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; };
+async function streamBytes(stream) { const buf = await new Response(stream).arrayBuffer(); return new Uint8Array(buf); }
+async function packPayload(obj) { const json = new TextEncoder().encode(JSON.stringify(obj));
+  if (typeof CompressionStream === 'function') { try { const z = await streamBytes(new Blob([json]).stream().pipeThrough(new CompressionStream('deflate-raw'))); if (z.length < json.length) return 'z' + b64u(z); } catch (e) {} }
+  return 'j' + b64u(json); }
+async function unpackPayload(s) { const kind = s[0], u = unb64u(s.slice(1)); let bytes = u;
+  if (kind === 'z') { if (typeof DecompressionStream !== 'function') throw new Error('This browser cannot open compressed links'); bytes = await streamBytes(new Blob([u]).stream().pipeThrough(new DecompressionStream('deflate-raw'))); }
+  else if (kind !== 'j') throw new Error('bad link'); return JSON.parse(new TextDecoder().decode(bytes)); }
+// compact card: meal ids only (names, ingredients and grocery needs are rebuilt from research data)
+function linkCard(kind) { const H = S.household, me = hhMe(), wk = weekKey(new Date()), w0 = fromKey(wk).getTime();
+  return { t: kind, h: H.id, i: uid(), u: Date.now(), wk, m: { id: me.id, n: me.name, c: me.color, a: me.allergies, v: me.avoid, p: me.phase }, w: me.week.map(x => [Math.round((fromKey(x.date).getTime() - w0) / DAY_MS), SLOTS.indexOf(x.slot), x.mealId]) }; }
+function cardToMember(c) { const w0 = fromKey(c.wk); const week = (c.w || []).map(([d, s, id]) => { const m = R.meals.find(x => x.id === id) || mealById(id); return { date: dayKey(addDays(w0, d)), slot: SLOTS[s] || 'dinner', mealId: id, name: m ? m.name : id }; });
+  return { id: c.m.id, name: String(c.m.n || 'Member').slice(0, 30), color: c.m.c || HH_COLORS[1], allergies: c.m.a || [], avoid: c.m.v || [], phase: c.m.p ?? null, pace: null, week, grocery: hhNeeds(week), updatedAt: c.u || Date.now(), via: 'link' }; }
+async function buildLink(kind) { const p = await packPayload(linkCard(kind)); return APP_URL + '#' + (kind === 'j' ? 'join=' : 'member=') + p; }
+async function shareLink(kind) {
+  const url = await buildLink(kind), text = (kind === 'j' ? 'Join my Food Log household: ' : 'My Food Log week: ') + url;
+  const box = $('#hhLinkBox'); if (box) { box.hidden = false; $('#hhLinkText').value = text; $('#hhLinkNote').textContent = ''; }
+  if (url.length > LINK_MAX) { if (box) $('#hhLinkNote').textContent = `This week is too big for a text (${url.length} characters). Sharing it as a file instead.`; await hhShareFile(hhExport(), `${S.household.me.name.replace(/[^\w-]+/g, '_')}.foodlog-household.json`); return { url, text, via: 'file' }; }
+  if (navigator.share) { try { await navigator.share({ text }); return { url, text, via: 'share' }; } catch (e) { if (e.name === 'AbortError') return { url, text, via: 'cancelled' }; } }
+  if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) { location.href = 'sms:?&body=' + encodeURIComponent(text); return { url, text, via: 'sms' }; }
+  try { await navigator.clipboard.writeText(text); toast('Link copied. Paste it into a text message.'); return { url, text, via: 'copy' }; } catch (e) { toast('Copy the link below and text it.'); return { url, text, via: 'shown' }; }
+}
+let pendingInvite = null;
+function clearFragment() { history.replaceState(null, '', location.pathname + location.search); }
+async function handleLinkHash() {
+  const m = location.hash.match(/^#(join|member)=([\w-]+)$/); if (!m) return;
+  let c; try { c = await unpackPayload(m[2]); } catch (e) { clearFragment(); return toast("That household link couldn't be opened. Ask for a new one."); }
+  if (!c || !c.h || !c.m || !c.m.id) { clearFragment(); return toast("That household link couldn't be opened."); }
+  const H = S.household;
+  if (H && H.id !== c.h) { clearFragment(); return showLinkMsg('⚠️ That link is for a different household. Nothing was changed.'); }
+  if (H) { clearFragment(); return applyMemberCard(c); }
+  if (m[1] === 'member') { clearFragment(); return showLinkMsg('⚠️ Join a household first, then open this update.'); }
+  pendingInvite = c; $('#hhInviteTitle').textContent = `${c.m.n || 'Someone'} invited you to their household. Join?`; $('#hhInvName').value = (S.profile && S.profile.name) || '';
+  $('#hhInvColors').innerHTML = HH_COLORS.filter(x => x !== c.m.c).map((x, i) => `<button type="button" class="hh-color${i === 0 ? ' on' : ''}" data-c="${x}" style="background:${x}" aria-label="Color ${i + 1}"></button>`).join('');
+  $('#hhInvite').showModal();
+}
+async function applyMemberCard(c) { const H = S.household; if (c.m.id === H.me.id) return toast('That link is your own week');
+  const ex = H.members[c.m.id]; if (ex && ex.updatedAt >= (c.u || 0)) { showLinkMsg(`That update from ${ex.name} is older than the one you have. Kept the newer week.`); return false; }
+  H.members[c.m.id] = cardToMember(c); await save('household'); if (curTab === 'household') renderHousehold(); toast(`${ex ? 'Updated' : 'Added'} ${H.members[c.m.id].name}'s week`); return true; }
+function showLinkMsg(t) { const d = $('#hhLinkMsg'); $('#hhLinkMsgText').textContent = t; d.showModal(); }
+document.addEventListener('click', async e => {
+  const t = e.target;
+  if (t.closest('#hhInvColors .hh-color')) { $$('#hhInvColors .hh-color').forEach(b => b.classList.toggle('on', b === t.closest('.hh-color'))); return; }
+  if (t.id === 'hhInvJoin') { const c = pendingInvite; if (!c) return; const name = $('#hhInvName').value.trim(); if (!name) return toast('Add your name first');
+    S.household = { id: c.h, me: { id: 'm-' + uid() + uid(), name, color: ($('#hhInvColors .hh-color.on') || {}).dataset?.c || HH_COLORS[1] }, members: {}, view: 'merged', createdAt: Date.now(), joinedVia: c.i };
+    S.household.members[c.m.id] = cardToMember(c); pendingInvite = null; await save('household'); clearFragment(); $('#hhInvite').close();
+    $('#hhSendBackName').textContent = c.m.n || 'them'; $('#hhInstallHint').hidden = matchMedia('(display-mode: standalone)').matches; $('#hhSendBack').showModal(); return; }
+  if (t.id === 'hhInvNo') { pendingInvite = null; clearFragment(); $('#hhInvite').close(); return; }
+  if (t.id === 'hhSendBackBtn') { $('#hhSendBack').close(); show('household'); await shareLink('m'); return; }
+  if (t.id === 'hhSendBackLater') { $('#hhSendBack').close(); show('household'); return; }
+  if (t.id === 'hhLinkMsgOk') { $('#hhLinkMsg').close(); return; }
+  if (t.closest('#hhInviteText')) { await shareLink('j'); return; }
+  if (t.closest('#hhUpdateText')) { await shareLink('m'); return; }
+});
+window.addEventListener('hashchange', handleLinkHash);
 
 /* ---------- meal picker ---------- */
 let pickCtx = null;
@@ -1497,9 +1558,9 @@ $('#installBtn').onclick = async () => { if (deferredPrompt) { deferredPrompt.pr
 (async () => {
   await DB.open(); await loadState(); try { archiveLeftovers(); } catch (e) {} if (S.settings.planStyle == null) { S.settings.planStyle = S.plan && (S.plan.days || []).some(d => Object.keys(d.meals || {}).length) ? 'pending' : 'choose'; save('settings'); } await loadResearch();
   if (!S.profile) { fillProfile(); show('profile'); } else show('today');
-  resolvePending();
+  resolvePending(); handleLinkHash();
   document.addEventListener('visibilitychange', async () => { if (document.visibilityState === 'visible' && navigator.onLine) { await loadResearch(); if (curTab !== 'add' && curTab !== 'profile' && curTab !== 'quiz') show(curTab); } });
-  window.__fl = { mainFoods, mealById, library, S, R, save, show, weeklyExport, offLookup, parseLabel, lookupAndOpen, storeCheck, ensurePlan, addSwapToGrocery, renderPlan, renderPicker, askLeftovers, saveLeftovers, archiveLeftovers, renderLeftovers, loMatches, eatLeftover, hhNeeds, hhExport, hhImport, hhMerged, hhAll, renderHousehold, zipInfo, zipHint, zipToState, myState, seasonShare, seasonTable, seasonSort, makeOptions, mealSuggestHTML, parseIngredientText, startVoice, queueVoice, renderVoiceQueue, pantryUseEntry, pantryAdd, pantryUse, pantryDue, pantryRecipes, renderPantryNudge, renderPantryList, mealBlocked, weekPlanDays, researchWeekPlan, userAllergens, conflict, slotOf, migrateMealIds, mealHour, gInfo, walmartPick, satisfied, checkHolds, addMealThisWeek, approveWeek, weekKey, boughtState, markCooked, walmartCartUrl, renderGrocery, storeKey, availHTML, exportProfile, markScannedForToCook, planDaysAhead, saveToCook, renderToCook, tonightItem, dinnerHour, resolveSwapQueue, swapsFor };
+  window.__fl = { mainFoods, mealById, library, S, R, save, show, weeklyExport, offLookup, parseLabel, lookupAndOpen, storeCheck, ensurePlan, addSwapToGrocery, renderPlan, renderPicker, packPayload, unpackPayload, buildLink, linkCard, shareLink, handleLinkHash, applyMemberCard, askLeftovers, saveLeftovers, archiveLeftovers, renderLeftovers, loMatches, eatLeftover, hhNeeds, hhExport, hhImport, hhMerged, hhAll, renderHousehold, zipInfo, zipHint, zipToState, myState, seasonShare, seasonTable, seasonSort, makeOptions, mealSuggestHTML, parseIngredientText, startVoice, queueVoice, renderVoiceQueue, pantryUseEntry, pantryAdd, pantryUse, pantryDue, pantryRecipes, renderPantryNudge, renderPantryList, mealBlocked, weekPlanDays, researchWeekPlan, userAllergens, conflict, slotOf, migrateMealIds, mealHour, gInfo, walmartPick, satisfied, checkHolds, addMealThisWeek, approveWeek, weekKey, boughtState, markCooked, walmartCartUrl, renderGrocery, storeKey, availHTML, exportProfile, markScannedForToCook, planDaysAhead, saveToCook, renderToCook, tonightItem, dinnerHour, resolveSwapQueue, swapsFor };
 })();
 
 /* ---------- resolve offline-queued barcodes when back online ---------- */
