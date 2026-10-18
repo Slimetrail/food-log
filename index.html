@@ -272,6 +272,7 @@
   <div class="sub my-store" id="myStoreLine" hidden></div>
   <div class="card walmart" id="walmartBox" hidden></div>
   <form class="row" id="groceryForm"><input id="groceryInput" placeholder="Add an item…" autocomplete="off"><button class="btn primary">Add</button></form>
+  <button class="btn big voice-queue-btn" type="button" hidden></button>
   <ul class="grocery" id="groceryList"></ul>
   <details class="card" id="pantryCard"><summary><b>🥫 My pantry <span id="pantryCount"></span></b><div class="sub">What you have on hand and when you last used it.</div></summary><ul class="grocery pantry-list" id="pantryList"></ul></details>
   <div class="empty" id="groceryEmpty">Your list is empty. Add items above or send your meal plan here.</div>
@@ -289,6 +290,13 @@
   <button data-tab="grocery"><span>🛒</span>Grocery</button>
 </nav>
 
+<dialog id="voiceDlg"><div class="pick-head"><h2>🎤 Say your ingredients</h2><button class="btn" id="voiceClose" type="button">Close</button></div>
+<div class="voice-mic"><span id="voiceMicBig">🎤</span></div><div class="sub" id="voiceStatus" role="status"></div>
+<label>What I heard<textarea id="voiceText" rows="3" placeholder="Your words show up here"></textarea></label>
+<ul id="voiceParsed" class="voice-parsed"></ul>
+<div class="slot-btns"><button class="btn primary big" id="voiceUse" type="button">Use this</button><button class="btn big" id="voiceAgain" type="button">Try again</button></div>
+<button class="btn big" id="voiceStop" type="button" hidden>Done talking</button>
+<button class="btn big voice-queue-btn" type="button" hidden></button></dialog>
 <dialog id="mealPicker"><div class="pick-head"><h2 id="pickTitle">Choose a meal</h2><button class="btn" id="pickClose">Close</button></div>
 <input id="pickSearch" type="search" placeholder="Search meals or ingredients" autocomplete="off">
 <div class="chips" id="pickFilters"><button type="button" data-f="quick">⚡ Quick</button><button type="button" data-f="budget">$ Budget</button><button type="button" data-f="store">🏪 At my store</button><select id="pickTag" aria-label="Tag"></select></div>

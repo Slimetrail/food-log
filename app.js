@@ -31,7 +31,7 @@ const DB = {
   get(k) { return new Promise(res => { const r = this.db.transaction('kv').objectStore('kv').get(k); r.onsuccess = () => res(r.result); r.onerror = () => res(undefined); }); },
   set(k, v) { return new Promise(res => { const t = this.db.transaction('kv', 'readwrite'); t.objectStore('kv').put(v, k); t.oncomplete = res; t.onerror = res; }); }
 };
-const S = { pantry: [], toCook: [], planAnchor: null, stepChecks: {}, mySteps: [], phaseLog: [], medas: [], focus: [], skips: [], tipDismissed: {}, water: {}, favorites: [], offCache: {}, pendingScans: [], goals: null, weights: [], quizHistory: [], entries: [], grocery: [], myMeals: [], plan: null, queue: [], profile: null, dailyActivity: {}, quiz: null, settings: { waterTarget: null, waterField: null, target: null, targetMin: null, planMode: 'weekly', units: 'us', intervalH: null, notify: false, mealTimes: null } };
+const S = { voiceQueue: [], pantry: [], toCook: [], planAnchor: null, stepChecks: {}, mySteps: [], phaseLog: [], medas: [], focus: [], skips: [], tipDismissed: {}, water: {}, favorites: [], offCache: {}, pendingScans: [], goals: null, weights: [], quizHistory: [], entries: [], grocery: [], myMeals: [], plan: null, queue: [], profile: null, dailyActivity: {}, quiz: null, settings: { waterTarget: null, waterField: null, target: null, targetMin: null, planMode: 'weekly', units: 'us', intervalH: null, notify: false, mealTimes: null } };
 const KEYS = Object.keys(S);
 async function loadState() { for (const k of KEYS) { const v = await DB.get(k); if (v !== undefined) S[k] = (k === 'settings') ? { ...S.settings, ...v } : v; } }
 const save = (...ks) => Promise.all(ks.map(k => DB.set(k, S[k])));
@@ -1115,6 +1115,74 @@ $('#planDays').onclick = async e => {
 };
 $('#clearWeek').onclick = async () => { const days = weekPlanDays(); const n = days.reduce((a, d) => a + Object.keys(d.meals).length, 0); if (!n) return toast('Nothing planned this week'); if (!confirm(`Remove all ${n} planned meals this week?`)) return; const snap = snapshot(); for (const d of days) for (const s of Object.keys(d.meals)) await removePlanned(d.date, s); await save('plan', 'toCook', 'grocery'); renderPlan(); toastUndo(`Cleared ${n} meals this week`, snap); };
 $('#planChoice').onclick = async e => { const b = e.target.closest('[data-choice]'); if (!b) return; if (b.dataset.choice === 'fresh') { const tk = dayKey(new Date()); for (const d of (S.plan ? S.plan.days : [])) if (d.date >= tk) d.meals = {}; } if (S.plan) S.plan.style = 'choose'; S.settings.planStyle = 'choose'; await save('plan', 'settings'); renderPlan(); toast(b.dataset.choice === 'fresh' ? 'Plan cleared. Choose your meals.' : 'Kept the suggestions. Change any meal.'); };
+/* ---------- shared ingredient parser (My meals text, voice) ---------- */
+const NUMW = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, dozen: 12, half: 0.5, quarter: 0.25, third: 1 / 3, couple: 2, few: 3 };
+const UNITW = [[/^(cups?)$/, 'cup'], [/^(pounds?|lbs?)$/, 'lb'], [/^(ounces?|oz)$/, 'oz'], [/^(tablespoons?|tbsps?|tbs)$/, 'tbsp'], [/^(teaspoons?|tsps?)$/, 'tsp'], [/^(grams?|g)$/, 'g'], [/^(kilos?|kilograms?|kg)$/, 'kg'], [/^(milliliters?|millilitres?|ml)$/, 'ml'], [/^(liters?|litres?|l)$/, 'l'], [/^(cans?)$/, 'can'], [/^(cloves?)$/, 'clove'], [/^(slices?)$/, 'slice'], [/^(pieces?|pcs?)$/, 'piece'], [/^(handfuls?)$/, 'handful'], [/^(bunch|bunches)$/, 'bunch'], [/^(bags?)$/, 'bag'], [/^(jars?)$/, 'jar'], [/^(boxe?s?)$/, 'box'], [/^(bottles?)$/, 'bottle'], [/^(packs?|packages?)$/, 'pack'], [/^(heads?)$/, 'head'], [/^(gallons?)$/, 'gallon'], [/^(quarts?)$/, 'quart'], [/^(dozen)$/, 'dozen']];
+const unitOf = w => { for (const [re, u] of UNITW) if (re.test(w)) return u; return null; };
+function parseOne(seg) {
+  let toks = seg.toLowerCase().replace(/[^a-z0-9./½¼¾ -]/g, ' ').replace(/½/g, ' 1/2').replace(/¼/g, ' 1/4').replace(/¾/g, ' 3/4').split(/\s+/).filter(Boolean);
+  let amount = null, i = 0;
+  const numTok = t => /^\d+([.,]\d+)?$/.test(t) ? num(t) : /^\d+\/\d+$/.test(t) ? t.split('/').reduce((a, b) => a / b) : (t in NUMW ? NUMW[t] : null);
+  // "one and a half", "two and a half", "half a", "a half", "1 1/2"
+  while (i < toks.length) { const v = numTok(toks[i]); if (v == null) break;
+    if (toks[i] === 'half' || toks[i] === 'quarter' || toks[i] === 'third') amount = (amount && amount >= 1 ? amount + v : (amount && amount < 1 ? v : v)); else if (toks[i] === 'a' || toks[i] === 'an') { if (amount == null) amount = 1; } else if (toks[i] === 'dozen') amount = (amount || 1) * 12; else amount = amount != null && v < 1 ? amount + v : (amount != null && amount < 1 ? amount * v : v);
+    i++; if (toks[i] === 'and' && toks[i + 1] && (toks[i + 1] === 'a' || toks[i + 1] === 'half') && (toks[i + 2] === 'half' || toks[i + 1] === 'half')) { i += toks[i + 1] === 'a' ? 1 : 1; continue; } if (toks[i] === 'of') i++; }
+  let unit = '';
+  if (toks[i] && unitOf(toks[i])) { unit = unitOf(toks[i]); i++; if (toks[i] === 'of') i++; if (unit === 'dozen') { amount = (amount || 1) * 12; unit = ''; } }
+  if (amount != null && amount !== 1 && (toks[i] === 'a' || toks[i] === 'an')) i++;
+  const name = toks.slice(i).join(' ').replace(/^(of|some)\s+/, '').trim();
+  const f = name ? (foodByName(name) || foodGuess(name)) : null;
+  return { amount: amount != null ? Math.round(amount * 1000) / 1000 : null, unit, name, foodId: f ? f.id : null, raw: seg.trim() };
+}
+function foodGuess(name) { const ws = words(name).map(stem); if (!ws.length) return null; let best = null, bs = 0; for (const f of R.foods || []) { const fw = new Set([...words(f.name), ...(f.aliases || []).flatMap(words)].map(stem)); const hit = ws.filter(w => fw.has(w)).length / ws.length; if (hit > bs) { bs = hit; best = f; } } return bs >= 0.99 ? best : null; }
+function parseIngredientText(text) {
+  const segs = String(text || '').split(/\n|,|;|\bthen\b|\band then\b|\bplus\b|\balso\b/i).flatMap(s => s.split(/\s+and\s+(?=(?:\d|a |an |one|two|three|four|five|six|seven|eight|nine|ten|half|some)\b)/i)).map(s => s.trim()).filter(Boolean);
+  const items = segs.map(parseOne).filter(x => x.name);
+  const score = it => (it.amount != null ? 0.3 : 0.1) + (it.unit ? 0.2 : it.amount != null ? 0.1 : 0.05) + (it.foodId ? 0.5 : 0);
+  const confidence = items.length ? Math.round(items.reduce((a, it) => a + score(it), 0) / items.length * 100) / 100 : 0;
+  return { items, confidence, low: confidence < 0.6 };
+}
+const voiceIngText = it => [it.amount != null ? r1(it.amount) : '', it.unit, it.name].filter(Boolean).join(' ');
+/* ---------- voice capture (Web Speech API; no bundled model) ---------- */
+const VOICE_FALLBACK = "Voice needs a connection on this phone. Tap the text box and use your keyboard's 🎤 dictation (works offline on most phones).";
+let vc = null;
+function addMics() { for (const id of ['ffName', 'groceryInput', 'mfIng']) { const el = document.getElementById(id); if (!el || el.dataset.mic) continue; el.dataset.mic = '1'; const b = document.createElement('button'); b.type = 'button'; b.className = 'mic-btn'; b.dataset.micFor = id; b.setAttribute('aria-label', 'Speak ingredients'); b.textContent = '🎤'; const w = document.createElement('div'); w.className = 'mic-wrap'; el.parentNode.insertBefore(w, el); w.appendChild(el); w.appendChild(b); } }
+function voiceUI(state, msg) { const d = $('#voiceDlg'); d.dataset.state = state; $('#voiceStatus').textContent = msg || ''; $('#voiceMicBig').classList.toggle('listening', state === 'listening'); $('#voiceUse').hidden = state === 'listening'; $('#voiceAgain').hidden = state === 'listening'; $('#voiceStop').hidden = state !== 'listening'; renderVoiceQueue(); }
+function startVoice(target) {
+  vc = { target, text: '', final: '' }; $('#voiceText').value = ''; $('#voiceParsed').innerHTML = ''; const d = $('#voiceDlg'); if (!d.open) d.showModal();
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR || !navigator.onLine) return voiceUI('fallback', VOICE_FALLBACK);
+  let r; try { r = new SR(); } catch (e) { return voiceUI('fallback', VOICE_FALLBACK); }
+  vc.rec = r; r.lang = navigator.language || 'en-US'; r.interimResults = true; r.continuous = false; r.maxAlternatives = 1;
+  r.onresult = e => { let fin = '', int = ''; for (let k = 0; k < e.results.length; k++) { const t = e.results[k][0].transcript; if (e.results[k].isFinal) fin += t; else int += t; } vc.final = fin; vc.text = (fin + ' ' + int).trim(); $('#voiceText').value = vc.text; };
+  r.onerror = e => { vc.err = e.error; if (['network', 'not-allowed', 'service-not-allowed', 'audio-capture'].includes(e.error)) { if (vc.text) queueVoice(vc.text, target); voiceUI('fallback', VOICE_FALLBACK + (vc.text ? ' What I heard so far is kept below and saved.' : '')); } };
+  r.onend = () => { if (vc.err && $('#voiceDlg').dataset.state === 'fallback') return; reviewVoice(); };
+  try { r.start(); voiceUI('listening', 'Listening… say e.g. "two cups of rice and half a pound of chicken"'); } catch (e) { voiceUI('fallback', VOICE_FALLBACK); }
+}
+function reviewVoice() {
+  const text = $('#voiceText').value.trim(); if (!text) return voiceUI('review', "I didn't catch that. Try again, or type it.");
+  const p = parseIngredientText(text); vc.parsed = p;
+  if (!p.low && !vc.forceReview) { applyVoice(vc.target, p); $('#voiceDlg').close(); toast(`🎤 Added ${p.items.length} item${p.items.length === 1 ? '' : 's'}`); return; }
+  $('#voiceParsed').innerHTML = p.items.map(it => `<li>${esc(voiceIngText(it))}${it.foodId ? '' : ' <span class="sub">(not matched)</span>'}</li>`).join('');
+  voiceUI('review', 'Not sure I got that right. Fix the text if needed, then tap Use this.');
+}
+function applyVoice(target, p) {
+  if (target === 'groceryInput') { for (const it of p.items) S.grocery.push({ id: uid(), name: it.name, text: voiceIngText(it), foodId: it.foodId || undefined, done: false, from: 'voice' }); save('grocery'); renderGrocery(); }
+  else if (target === 'mfIng') { const el = $('#mfIng'); el.value = [el.value.trim(), ...p.items.map(voiceIngText)].filter(Boolean).join('\n'); }
+  else if (target === 'ffName') { const it = p.items[0]; if (!it) return; $('#ffName').value = it.name; if (it.amount != null) { $('#ffQty').value = it.amount; $('#ffQty').dispatchEvent(new Event('input')); } }
+}
+function queueVoice(text, target) { S.voiceQueue = S.voiceQueue || []; if (!S.voiceQueue.some(q => q.text === text)) { S.voiceQueue.push({ id: uid(), text, target, at: Date.now() }); save('voiceQueue'); } }
+function renderVoiceQueue() { const n = (S.voiceQueue || []).length; for (const b of $$('.voice-queue-btn')) { b.hidden = !n || !navigator.onLine; b.textContent = `🎤 Parse saved voice notes (${n})`; } }
+async function parseVoiceQueue() { const q = S.voiceQueue || []; if (!q.length) return; const n = q.shift(); await save('voiceQueue'); vc = { target: n.target, text: n.text, forceReview: true }; $('#voiceText').value = n.text; if (!$('#voiceDlg').open) $('#voiceDlg').showModal(); reviewVoice(); }
+document.addEventListener('click', e => { const b = e.target.closest('[data-mic-for]'); if (b) { e.preventDefault(); startVoice(b.dataset.micFor); } if (e.target.closest('.voice-queue-btn')) parseVoiceQueue(); });
+$('#voiceStop').onclick = () => { try { vc && vc.rec && vc.rec.stop(); } catch (e) { reviewVoice(); } };
+$('#voiceAgain').onclick = () => startVoice(vc ? vc.target : 'groceryInput');
+$('#voiceUse').onclick = () => { const text = $('#voiceText').value.trim(); if (!text) return; const p = parseIngredientText(text); applyVoice(vc.target, p); S.voiceQueue = (S.voiceQueue || []).filter(q => q.text !== text); save('voiceQueue'); $('#voiceDlg').close(); toast(`🎤 Added ${p.items.length} item${p.items.length === 1 ? '' : 's'}`); };
+$('#voiceClose').onclick = () => { try { vc && vc.rec && vc.rec.abort(); } catch (e) {} const t = $('#voiceText').value.trim(); if (t && $('#voiceDlg').dataset.state !== 'review') queueVoice(t, vc.target); $('#voiceDlg').close(); };
+$('#voiceText').oninput = () => { if (vc) vc.text = $('#voiceText').value; };
+window.addEventListener('online', renderVoiceQueue); window.addEventListener('offline', renderVoiceQueue);
+addMics();
+
 /* ---------- meal picker ---------- */
 let pickCtx = null;
 const mealAtStore = m => { if (!myStore()) return false; const ings = (m.ingredients || []).filter(i => !isPantry(i)); return ings.length > 0 && ings.every(i => { const a = storeAvail(storeFields(i)); return a && a.inStock; }); };
@@ -1152,8 +1220,7 @@ $('#library').onclick = async e => { const id = e.target.closest('[data-del]')?.
 $('#addMealBtn').onclick = () => { $('#mealForm').hidden = false; $('#mealForm').reset(); $('#mfName').focus(); };
 $('#mfCancel').onclick = () => $('#mealForm').hidden = true;
 const UNITS = /^(g|kg|ml|l|oz|lb|lbs|cups?|tbsp|tsp|cans?|cloves?|pcs?|pieces?|slices?|handfuls?|bunch(es)?)$/i;
-function parseIng(line) { line = line.trim(); const m = line.match(/^(\d+(?:[.,]\d+)?|\d+\/\d+)\s*(\S+)?\s*(.*)$/); if (!m) return { name: line, amount: null, unit: '' };
-  let amount = m[1].includes('/') ? m[1].split('/').reduce((a, b) => a / b) : num(m[1]); if (m[2] && UNITS.test(m[2])) return { amount, unit: m[2].toLowerCase(), name: m[3] || '' }; return { amount, unit: '', name: [m[2], m[3]].filter(Boolean).join(' ') }; }
+function parseIng(line) { const it = parseOne(line); return { amount: it.amount, unit: it.unit, name: it.name || line.trim(), foodId: it.foodId || undefined }; }
 $('#mealForm').onsubmit = async e => { e.preventDefault(); S.myMeals.push({ id: 'my-' + uid(), name: $('#mfName').value.trim(), slot: $('#mfSlot').value, ingredients: $('#mfIng').value.split('\n').filter(l => l.trim()).map(parseIng), steps: $('#mfSteps').value.split('\n').filter(l => l.trim()), kcalApprox: null, sources: [] }); await save('myMeals'); $('#mealForm').hidden = true; ensurePlan(true); renderPlan(); toast('Meal added'); };
 
 /* ---------- meal prep ---------- */
@@ -1183,6 +1250,7 @@ $('#planToGrocery').onclick = async () => {
 
 /* ---------- grocery ---------- */
 function renderGrocery() {
+  renderVoiceQueue();
   renderPantryList();
   const ms = myStore(), sl = $('#myStoreLine'); if (sl) { sl.hidden = !ms; if (ms) sl.textContent = `🏪 ${ms.chain}${ms.city ? ', ' + ms.city : ''}${ms.state ? ', ' + ms.state : ''}${ms.inStoreOnly ? ' · in-store only' : ''}`; }
   const GL = R.groceryLists, weeks = GL && Array.isArray(GL.weeks) ? GL.weeks : [];
@@ -1258,7 +1326,7 @@ $('#installBtn').onclick = async () => { if (deferredPrompt) { deferredPrompt.pr
   if (!S.profile) { fillProfile(); show('profile'); } else show('today');
   resolvePending();
   document.addEventListener('visibilitychange', async () => { if (document.visibilityState === 'visible' && navigator.onLine) { await loadResearch(); if (curTab !== 'add' && curTab !== 'profile' && curTab !== 'quiz') show(curTab); } });
-  window.__fl = { mainFoods, mealById, library, S, R, save, show, weeklyExport, offLookup, parseLabel, lookupAndOpen, storeCheck, ensurePlan, addSwapToGrocery, renderPlan, renderPicker, pantryUseEntry, pantryAdd, pantryUse, pantryDue, pantryRecipes, renderPantryNudge, renderPantryList, mealBlocked, weekPlanDays, researchWeekPlan, userAllergens, conflict, slotOf, migrateMealIds, mealHour, gInfo, walmartPick, satisfied, checkHolds, addMealThisWeek, approveWeek, weekKey, boughtState, markCooked, walmartCartUrl, renderGrocery, storeKey, availHTML, exportProfile, markScannedForToCook, planDaysAhead, saveToCook, renderToCook, tonightItem, dinnerHour, resolveSwapQueue, swapsFor };
+  window.__fl = { mainFoods, mealById, library, S, R, save, show, weeklyExport, offLookup, parseLabel, lookupAndOpen, storeCheck, ensurePlan, addSwapToGrocery, renderPlan, renderPicker, parseIngredientText, startVoice, queueVoice, renderVoiceQueue, pantryUseEntry, pantryAdd, pantryUse, pantryDue, pantryRecipes, renderPantryNudge, renderPantryList, mealBlocked, weekPlanDays, researchWeekPlan, userAllergens, conflict, slotOf, migrateMealIds, mealHour, gInfo, walmartPick, satisfied, checkHolds, addMealThisWeek, approveWeek, weekKey, boughtState, markCooked, walmartCartUrl, renderGrocery, storeKey, availHTML, exportProfile, markScannedForToCook, planDaysAhead, saveToCook, renderToCook, tonightItem, dinnerHour, resolveSwapQueue, swapsFor };
 })();
 
 /* ---------- resolve offline-queued barcodes when back online ---------- */
