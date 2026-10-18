@@ -1012,15 +1012,21 @@ function researchWeekPlan() {
   const W = R.weekly; const mp = W && (Array.isArray(W.mealPlan) && W.mealPlan.length ? W.mealPlan : (W.referenceMenu && Array.isArray(W.referenceMenu.days) ? W.referenceMenu.days : null)); if (!mp || !mp.length) return null;
   const from = W.weekOf ? fromKey(String(W.weekOf).slice(0, 10)) : (S.planAnchor ? fromKey(S.planAnchor) : (S.planAnchor = dayKey(new Date()), save('planAnchor'), fromKey(S.planAnchor))); const today = dayKey(new Date());
   const days = mp.slice(0, 7).map((d, i) => { const meals = {}; const add = id => { const m = mealById(id); if (m) meals[slotOf(m)] = m.id; };
-    if (typeof d === 'string') add(d); else if (Array.isArray(d)) d.forEach(add); else if (d && typeof d === 'object') Object.entries(d).forEach(([k, v]) => { if (SLOTS.includes(k) && mealById(v)) meals[k] = v; });
-    return { date: d && d.date ? String(d.date).slice(0, 10) : dayKey(addDays(from, i)), meals, options: {} }; });
+    const blocked = [], ren = R.mealsRenamed || {}; const rid = v => (typeof v === 'string' && ren[v]) || v;
+    if (typeof d === 'string') add(rid(d)); else if (Array.isArray(d)) d.map(rid).forEach(add); else if (d && typeof d === 'object') Object.entries(d).forEach(([k, v]) => { if (!SLOTS.includes(k) || !v) return; v = rid(v); if (mealById(v)) meals[k] = v; else if (R.meals.some(m => m.id === v)) blocked.push({ slot: k, id: v }); });
+    return { date: d && d.date ? String(d.date).slice(0, 10) : dayKey(addDays(from, i)), meals, options: {}, blocked }; });
+  // allergy/avoid swaps: a blocked research meal is replaced by an allowed meal from the same slot (no same-day repeat), never dropped
+  let swapped = 0;
+  days.forEach((d, i) => { for (const b of d.blocked || []) { const pool = shuffle(library().filter(m => m.origin === 'research' && slotOf(m) === b.slot));
+    const alt = pool.find(m => !conflict(m, d, b.slot, days[i - 1], days[i + 1])) || pool.find(m => !Object.values(d.meals).includes(m.id) && !sameDayWarn(m, d, b.slot)) || pool.find(m => !Object.values(d.meals).includes(m.id));
+    if (alt) { d.meals[b.slot] = alt.id; d.swappedFrom = { ...(d.swappedFrom || {}), [b.slot]: b.id }; swapped++; } } delete d.blocked; });
   const gap = Math.round((fromKey(days[0].date) - startOfDay(new Date())) / 86400000);
   if (gap > 0 && gap < 7) days.unshift(...newDays(startOfDay(new Date()), gap, null));
   if (!days.some(d => d.date >= today) || !days.some(d => Object.keys(d.meals).length)) return null;
   days.forEach((d, i) => { if (Object.keys(d.options || {}).length && i < (gap > 0 ? gap : 0)) return; makeOptions(d, days[i - 1]); for (const slot of SLOTS) if (!d.meals[slot] && (d.options[slot] || []).length) { const m = shuffle(d.options[slot].map(mealById).filter(Boolean)).find(m => !conflict(m, d, slot, days[i - 1], days[i + 1])); if (m) d.meals[slot] = m.id; } });
   for (let i = 0; i < (gap > 0 ? gap : 0); i++) { const d = days[i]; for (const slot of SLOTS) { const id = d.meals[slot]; if (!id) continue; const m = mealById(id); if (!m || !conflict(m, d, slot, days[i - 1], days[i + 1])) continue;
     delete d.meals[slot]; const alt = shuffle([...(d.options[slot] || []).map(mealById), ...library().filter(x => slotOf(x) === slot)].filter(Boolean)).find(x => !conflict(x, d, slot, days[i - 1], days[i + 1])); if (alt) { d.meals[slot] = alt.id; d.options[slot] = d.options[slot] || []; if (!d.options[slot].includes(alt.id)) { if (d.options[slot].length >= 4) d.options[slot][3] = alt.id; else d.options[slot].push(alt.id); } } } }
-  return { start: days[0].date, mode: 'research', days, sig: 'research:' + (W.version ?? W.weekOf) + ':' + (W.revision ?? '') + ':' + (W.weekOf ?? '') };
+  return { start: days[0].date, mode: 'research', days, swapped, sig: 'allergy:' + userAllergens().join(',') + ':research:' + (W.version ?? W.weekOf) + ':' + (W.revision ?? '') + ':' + (W.weekOf ?? '') };
 }
 function ensurePlan(force) {
   const lib = library(); if (!lib.length) { S.plan = null; return; }
@@ -1166,7 +1172,8 @@ const stem = w => w.replace(/(es|s)$/, '');
 function matchGrocery(p, food) {
   const cats = (p.categories || []).filter(c => /^en:/.test(c)).map(c => c.slice(3).replace(/-/g, ' '));
   const pw = new Set([...words(p.name), ...cats.flatMap(words), ...(food ? [...words(food.name), ...(food.aliases || []).flatMap(words)] : [])].map(stem));
-  return S.grocery.find(g => !g.done && words(g.name || g.text).some(w => pw.has(stem(w))));
+  // best match wins: highest share of the item's words found in the product (avoids checking off e.g. another '... spread')
+  let best = null, bs = 0; for (const g of S.grocery) { if (g.done) continue; const ws = words(g.name || g.text); if (!ws.length) continue; const hit = ws.filter(w => pw.has(stem(w))).length; const sc = hit / ws.length + hit * 0.01; if (hit && sc > bs) { bs = sc; best = g; } } return best;
 }
 async function storeCheck(code) {
   const v = $('#verdict'); v.innerHTML = '<div class="status">Looking up ' + esc(code) + '…</div>';
@@ -1207,7 +1214,7 @@ $('#installBtn').onclick = async () => { if (deferredPrompt) { deferredPrompt.pr
   if (!S.profile) { fillProfile(); show('profile'); } else show('today');
   resolvePending();
   document.addEventListener('visibilitychange', async () => { if (document.visibilityState === 'visible' && navigator.onLine) { await loadResearch(); if (curTab !== 'add' && curTab !== 'profile' && curTab !== 'quiz') show(curTab); } });
-  window.__fl = { mainFoods, mealById, library, S, R, save, show, weeklyExport, offLookup, parseLabel, lookupAndOpen, storeCheck, ensurePlan, addSwapToGrocery, renderPlan, renderPicker, mealBlocked, weekPlanDays, migrateMealIds, mealHour, gInfo, walmartPick, satisfied, checkHolds, addMealThisWeek, approveWeek, weekKey, boughtState, markCooked, walmartCartUrl, renderGrocery, storeKey, availHTML, exportProfile, markScannedForToCook, planDaysAhead, saveToCook, renderToCook, tonightItem, dinnerHour, resolveSwapQueue, swapsFor };
+  window.__fl = { mainFoods, mealById, library, S, R, save, show, weeklyExport, offLookup, parseLabel, lookupAndOpen, storeCheck, ensurePlan, addSwapToGrocery, renderPlan, renderPicker, mealBlocked, weekPlanDays, researchWeekPlan, userAllergens, conflict, slotOf, migrateMealIds, mealHour, gInfo, walmartPick, satisfied, checkHolds, addMealThisWeek, approveWeek, weekKey, boughtState, markCooked, walmartCartUrl, renderGrocery, storeKey, availHTML, exportProfile, markScannedForToCook, planDaysAhead, saveToCook, renderToCook, tonightItem, dinnerHour, resolveSwapQueue, swapsFor };
 })();
 
 /* ---------- resolve offline-queued barcodes when back online ---------- */

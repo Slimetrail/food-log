@@ -1,16 +1,16 @@
 {
- "version": "b6ebcbebc7",
- "updatedAt": "2026-10-18T10:46:55.330Z",
+ "version": "35b137573f",
+ "updatedAt": "2026-10-18T11:20:44.105Z",
  "files": {
   "foods.json": {
    "version": "2026-10-17",
-   "revision": 3,
-   "bytes": 487522
+   "revision": 4,
+   "bytes": 514213
   },
   "meals.json": {
    "version": "2026-10-17",
-   "revision": 3,
-   "bytes": 569909
+   "revision": 4,
+   "bytes": 1207391
   },
   "groups.json": {
    "version": "2026-10-17",
@@ -19,8 +19,8 @@
   },
   "weekly-plan.json": {
    "version": "2026-10-17",
-   "revision": 3,
-   "bytes": 8170
+   "revision": 4,
+   "bytes": 11363
   },
   "meal-timing.json": {
    "version": "2026-10-17",
@@ -29,8 +29,8 @@
   },
   "alternatives.json": {
    "version": "2026-10-17",
-   "revision": 3,
-   "bytes": 156102
+   "revision": 4,
+   "bytes": 184578
   },
   "questionnaire.json": {
    "version": "2026-10-17",
@@ -59,8 +59,8 @@
   },
   "grocery-lists.json": {
    "version": "2026-10-17",
-   "revision": 3,
-   "bytes": 177012
+   "revision": 4,
+   "bytes": 192387
   }
  }
 }

@@ -46,7 +46,7 @@ try:
     ok('phase 1 chip on home', 'Phase 1' in pg.inner_text('#homeAlerts'))
     # wait for SW precache
     pg.evaluate("navigator.serviceWorker.ready"); pg.wait_for_function("caches.keys().then(k=>k.length>0)")
-    pg.wait_for_function("caches.open('foodlog-v10').then(c=>c.match('vendor/tessdata/eng.traineddata.gz')).then(r=>!!r)", timeout=60000)
+    pg.wait_for_function("caches.open('foodlog-v11').then(c=>c.match('vendor/tessdata/eng.traineddata.gz')).then(r=>!!r)", timeout=60000)
     ok('service worker precached OCR data', True)
     # --- real Open Food Facts lookups ---
     pg.click('#bigAdd'); pg.wait_for_selector('#s-add:not([hidden])')
@@ -238,6 +238,22 @@ try:
     ok('Keep suggestions keeps meals, hides choice', pg.evaluate("__fl.S.settings.planStyle")=='choose' and not pg.is_visible('#planChoice') and pg.evaluate("!!__fl.weekPlanDays()[0].meals.lunch"))
     pg.evaluate("(async()=>{const k=JSON.parse(window._keep);__fl.S.grocery=k.g;__fl.S.toCook=k.t;__fl.S.plan=k.p;__fl.S.settings.planStyle=k.s;await __fl.save('grocery','toCook','plan','settings')})()")
     pg.click('.tabs [data-tab=grocery]'); pg.wait_for_selector('#s-grocery:not([hidden])')
+    # --- peanut allergy: research week + Auto-fill swap blocked meals, never drop ---
+    pk = pg.evaluate('''(()=>{const fl=__fl,S=fl.S,keep=JSON.stringify(S.profile.allergies||[]);S.profile.allergies=[...(S.profile.allergies||[]),'peanut'];
+      const W=fl.R.weekly.mealPlan,ren=fl.R.mealsRenamed||{},raw=id=>fl.R.meals.find(m=>m.id===(ren[id]||id));
+      const want=W.slice(0,7).map(d=>({date:d.date,slots:['breakfast','lunch','dinner','snack'].filter(s=>d[s]&&raw(d[s]))}));
+      const nBlocked=W.slice(0,7).reduce((a,d)=>a+['breakfast','lunch','dinner','snack'].filter(s=>d[s]&&raw(d[s])&&fl.mealBlocked(raw(d[s]))).length,0);
+      const rp=fl.researchWeekPlan();const bad=[],missing=[],rep=[];
+      for(const w of want){const d=rp.days.find(x=>x.date===w.date);for(const s of w.slots){const id=d.meals[s];if(!id){missing.push(w.date+s);continue}const m=fl.R.meals.find(x=>x.id===id)||S.myMeals.find(x=>x.id===id);if(!m||fl.mealBlocked(m)||(m.allergens||[]).includes('peanuts'))bad.push(id);if(fl.slotOf(m)!==s)bad.push('slot:'+id)}
+        const ids=Object.values(d.meals);if(new Set(ids).size!==ids.length)rep.push(w.date)}
+      const lib=fl.library();
+      const af=lib.filter(m=>fl.mealBlocked(m)).length;
+      const peanutMeals=fl.R.meals.filter(m=>fl.mealBlocked(m)).length;
+      S.profile.allergies=JSON.parse(keep);return {nBlocked,swapped:rp.swapped,bad,missing,rep,af,peanutMeals,swaps:rp.days.filter(d=>d.swappedFrom).map(d=>d.date+':'+JSON.stringify(d.swappedFrom))}})()''')
+    print('PEANUT', pk)
+    ok('peanut allergy: research week has no blocked meals', pk['peanutMeals'] > 0 and not pk['bad'] and pk['af'] == 0)
+    ok('peanut allergy: blocked plan meals swapped (same slot), never dropped, no same-day repeat', pk['nBlocked'] > 0 and pk['swapped'] == pk['nBlocked'] and not pk['missing'] and not pk['rep'])
+    ok('renamedIds still resolve in research week', pg.evaluate("(()=>{const r=__fl.R.mealsRenamed;return Object.keys(r).length>0 && Object.values(r).every(n=>__fl.R.meals.some(m=>m.id===n))})()"))
     ctx.set_offline(True); pg.wait_for_timeout(300); ok('offline: cart link explains it needs a connection', 'needs a connection' in pg.inner_text('#walmartBox')); ctx.set_offline(False); pg.wait_for_timeout(300)
     pg.click('#storeBtn'); pg.fill('#storeInput', '3017620422003'); pg.click('#storeForm button'); pg.wait_for_selector('.verdict', timeout=30000)
     ok('store mode checked off matching item', pg.evaluate("__fl.S.grocery.find(g=>g.text==='hazelnut spread').done"))
