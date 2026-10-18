@@ -199,12 +199,16 @@ function tick() {
   let minH = null, maxH = null, src = '', planHtml = '', srcHtml = rule ? `<div class="src light">${evBadge(rule)} ${srcLinks(rule.sources)}</div>` : '';
   if (rule && rule.mealsPerDay) { const occ = occasions(entriesOn(new Date())), plan = rule.mealsPerDay + (rule.snacksPerDay || 0);
     planHtml = `Today's plan: <b>${rule.mealsPerDay} meals${rule.snacksPerDay ? ' + ' + rule.snacksPerDay + ' snack' : ''}</b> · ${Math.min(occ, plan)} of ${plan} so far`; }
-  if (rule && rule.minHoursBetween != null) { minH = rule.minHoursBetween; maxH = rule.maxHoursBetween; src = 'research'; }
-  else if (S.settings.intervalH) { minH = S.settings.intervalH; src = 'your reminder interval'; }
+  const cd = rule && rule.countdown, fu = rule && rule.fueling;
+  if (cd && cd.dueAfterHours != null) { minH = cd.dueAfterHours; maxH = cd.latestHours; src = 'research'; }
+  else if (rule && rule.minHoursBetween != null) { minH = rule.minHoursBetween; maxH = rule.maxHoursBetween; src = 'research'; }
+  if (fu && rule.activity === 'field') { const ph = rule.preHikeMealHoursBefore || fu.preHikeMealHoursBefore, rh = (R.targets && R.targets.recovery && R.targets.recovery.withinHours) || rule.recoveryWithinHours;
+    planHtml = `🥾 Field day: eat a meal ${ph ? ph.min + '–' + ph.max + ' h before you head out' : 'before heading out'}; on hikes over ${fu.appliesWhenActivityLongerThanHours} h, fuel every ${fu.intervalHours} h${rh ? `; recovery meal within ${rh} h after` : ''}.`; }
+  if (minH == null && S.settings.intervalH) { minH = S.settings.intervalH; src = 'your reminder interval (research has no value for today)'; }
   if (minH == null) { $('#nextMeal').innerHTML = (planHtml || 'Meal timing: <i>coming from research</i>') + '<div class="sub">Set a reminder interval in ⚙️ for a countdown</div>' + srcHtml; return; }
   const due = l.ts + minH * 3600000, left = due - Date.now();
-  let html = left > 0 ? `Next meal or snack in <b>${hms(left)}</b>` : `<b>Time to refuel 🍎</b> — even a small snack counts`;
-  html += maxH ? `<div class="sub">Window ${minH}–${maxH} h after last meal · ${esc(src)}</div>` : `<div class="sub">Every ${minH} h · ${esc(src)}</div>`;
+  let html = left > 0 ? `${fu && rule.activity === 'field' && src === 'research' ? 'Next snack on the trail in' : 'Next meal or snack in'} <b>${hms(left)}</b>` : `<b>Time to refuel 🍎</b> — even a small snack counts`;
+  html += fu && rule.activity === 'field' && src === 'research' ? `<div class="sub">Hike fuel every ${minH} h (hikes over ${fu.appliesWhenActivityLongerThanHours} h)</div>` : maxH ? `<div class="sub">Usually ${minH}–${maxH} h after your last meal · ${esc(src)}</div>` : `<div class="sub">Every ${minH} h · ${esc(src)}</div>`;
   $('#nextMeal').innerHTML = (planHtml ? planHtml + '<div style="height:6px"></div>' : '') + html + srcHtml;
   if (left <= 0 && S.settings.notify && notifiedFor !== l.id && 'Notification' in window && Notification.permission === 'granted') {
     notifiedFor = l.id;
@@ -693,10 +697,12 @@ function researchWeekPlan() {
   const from = W.weekOf ? fromKey(String(W.weekOf).slice(0, 10)) : (S.planAnchor ? fromKey(S.planAnchor) : (S.planAnchor = dayKey(new Date()), save('planAnchor'), fromKey(S.planAnchor))); const today = dayKey(new Date());
   const days = mp.slice(0, 7).map((d, i) => { const meals = {}; const add = id => { const m = mealById(id); if (m) meals[slotOf(m)] = m.id; };
     if (typeof d === 'string') add(d); else if (Array.isArray(d)) d.forEach(add); else if (d && typeof d === 'object') Object.entries(d).forEach(([k, v]) => { if (SLOTS.includes(k) && mealById(v)) meals[k] = v; });
-    return { date: dayKey(addDays(from, i)), meals, options: {} }; });
+    return { date: d && d.date ? String(d.date).slice(0, 10) : dayKey(addDays(from, i)), meals, options: {} }; });
+  const gap = Math.round((fromKey(days[0].date) - startOfDay(new Date())) / 86400000);
+  if (gap > 0 && gap < 7) days.unshift(...newDays(startOfDay(new Date()), gap, null));
   if (!days.some(d => d.date >= today) || !days.some(d => Object.keys(d.meals).length)) return null;
-  days.forEach((d, i) => { makeOptions(d, days[i - 1]); for (const slot of SLOTS) if (!d.meals[slot] && (d.options[slot] || []).length) { const m = shuffle(d.options[slot].map(mealById).filter(Boolean)).find(m => !conflict(m, d, slot, days[i - 1], days[i + 1])); if (m) d.meals[slot] = m.id; } });
-  return { start: days[0].date, mode: 'research', days, sig: 'research:' + (W.version ?? W.weekOf) };
+  days.forEach((d, i) => { if (Object.keys(d.options || {}).length && i < (gap > 0 ? gap : 0)) return; makeOptions(d, days[i - 1]); for (const slot of SLOTS) if (!d.meals[slot] && (d.options[slot] || []).length) { const m = shuffle(d.options[slot].map(mealById).filter(Boolean)).find(m => !conflict(m, d, slot, days[i - 1], days[i + 1])); if (m) d.meals[slot] = m.id; } });
+  return { start: days[0].date, mode: 'research', days, sig: 'research:' + (W.version ?? W.weekOf) + ':' + (W.revision ?? '') + ':' + (W.weekOf ?? '') };
 }
 function ensurePlan(force) {
   const lib = library(); if (!lib.length) { S.plan = null; return; }
@@ -981,7 +987,7 @@ const isDocRule = a => /mna_weight_change/.test(a.when || ''), isPhase2 = a => /
 function currentPhase() { const j = journey(); return j ? (j.phase === 'maintenance' ? 2 : j.phase) : null; }
 function renderHomeAlerts() {
   let h = ''; const adj = adjustments(), wl = weightLoss(), doc = adj.find(a => isDocRule(a) && a.active) || (wl && wl.alert ? { ...R.targets.weightAlert, wl } : null), ph = currentPhase();
-  if (doc) h += `<div class="alert doc">💙 <b>Worth a check-in with your doctor.</b> ${doc.wl ? `Your weight trend is down about ${doc.wl.pct}% over recent months. ` : ''}${esc((R.quiz && R.quiz.disclaimer) || 'Ongoing appetite loss or weight loss without trying can have causes worth checking.')}<div class="src">${evBadge(doc)} ${srcLinks(doc.sources)}</div></div>`;
+  if (doc) h += `<div class="alert doc">💙 <b>Worth a check-in with your doctor.</b> ${doc.wl ? (doc.wl.pct6 > (R.targets.weightAlert.lossPct || 5) && doc.wl.text ? esc(doc.wl.text) + ' ' : `Your weight trend is down about ${doc.wl.pct}% over ${doc.wl.months} months. `) : ''}${esc((R.quiz && R.quiz.disclaimer) || 'Ongoing appetite loss or weight loss without trying can have causes worth checking.')}<div class="src">${evBadge(doc)} ${srcLinks(doc.sources)}</div></div>`;
   if (ph) h += `<button class="phase-chip" id="phaseChip">${ph === 1 ? '🌱 Phase 1 · Regular meals first' : '🫒 Phase 2 · Swapping ultra-processed foods'} ›</button>`;
   else if (R.quiz && !S.quiz) h += `<button class="phase-chip" id="quizChip">📝 Take the 5-minute questionnaire ›</button>`;
   h += habitTips();
@@ -1001,8 +1007,9 @@ function habitTips() {
     if (tr.metric === 'skippedMeals') { const rm = r.reasonMatch == null ? null : [].concat(r.reasonMatch); n = S.skips.filter(k => k.ts >= from && (!rm || rm.includes(k.reason))).length; }
     else if (tr.metric === 'upfItems') n = S.entries.filter(e => e.ts >= from && e.nova == 4).length;
     else continue;
+    const aa = allergyAware(r); if (!aa.ok) continue;
     const doc = /doctor/.test(r.id) && R.quiz && R.quiz.disclaimer;
-    if (tr.threshold != null && n >= tr.threshold) out.push(`<div class="card tip${doc ? ' doc-tip' : ''}"><button class="x" data-tip="${esc(r.id)}" aria-label="Hide for today">✕</button><b>${doc ? '💙' : '💡'} ${esc(r.tip)}</b>${doc ? `<div class="sub" style="color:var(--ink)">${esc(R.quiz.disclaimer)}</div>` : ''}${r.why ? `<div class="sub">${esc(r.why)}</div>` : ''}<div class="src">${evBadge(r)} ${srcLinks(r.sources)}</div><div class="sub tiny">Shown because of your recent logs (an app suggestion, not a medical cutoff).</div></div>`);
+    if (tr.threshold != null && n >= tr.threshold) out.push(`<div class="card tip${doc ? ' doc-tip' : ''}"><button class="x" data-tip="${esc(r.id)}" aria-label="Hide for today">✕</button><b>${doc ? '💙' : '💡'} ${esc(r.tip)}</b>${doc ? `<div class="sub" style="color:var(--ink)">${esc(R.quiz.disclaimer)}</div>` : ''}${allergyNotesHTML(aa.notes)}${r.why ? `<div class="sub">${esc(r.why)}</div>` : ''}<div class="src">${evBadge(r)} ${srcLinks(r.sources)}</div><div class="sub tiny">Shown because of your recent logs (an app suggestion, not a medical cutoff).</div></div>`);
     if (out.length >= 2) break;
   }
   return out.join('');
@@ -1087,12 +1094,12 @@ function renderTodayGoals(es, total) {
 function renderProgress() {
   const ph = currentPhase(), adj = adjustments();
   const pa = adj.find(a => (ph === 2 ? isPhase2(a) : isPhase1(a)));
-  $('#phaseCard').innerHTML = ph ? `<div class="card enc"><b>${ph === 1 ? '🌱 Phase 1: regular meals first' : '🫒 Phase 2: swapping ultra-processed foods'}</b>${pa ? `<div class="sub" style="color:var(--ink)">${esc(pa.effect)}</div><div class="src">${evBadge(pa)} ${srcLinks(pa.sources)}</div>` : ''}</div>`
+  $('#phaseCard').innerHTML = ph ? `<div class="card enc"><b>${ph === 1 ? '🌱 Phase 1: regular meals first' : '🫒 Phase 2: swapping ultra-processed foods'}</b>${pa ? `<div class="sub" style="color:var(--ink)">${esc(pa.effect)}</div>${allergyNotesHTML(allergyAware(pa).notes)}<div class="src">${evBadge(pa)} ${srcLinks(pa.sources)}</div>` : ''}</div>`
     : (R.quiz ? `<div class="card"><b>📝 Questionnaire</b><div class="sub">5 minutes. It tailors your plan and phase.</div><button class="btn primary big" id="pqBtn">Start questionnaire</button></div>` : '');
   $('#pqBtn') && ($('#pqBtn').onclick = () => { renderQuiz(); show('quiz'); });
   renderSteps(); renderFocusGoal(); renderGoals(); renderNova(); renderMedas(); renderSodium();
-  const focus = adj.filter(a => a.active && !isDocRule(a) && !isPhase1(a) && !isPhase2(a));
-  $('#focusBody').innerHTML = focus.length ? `<div class="card"><b>Tailored to your answers</b><ul class="focus snack-list">${focus.map(a => `<li>${esc(a.effect)}<div class="src">${evBadge(a)} ${srcLinks(a.sources)}</div></li>`).join('')}</ul></div>` : '';
+  const focus = adj.filter(a => a.active && !isDocRule(a) && !isPhase1(a) && !isPhase2(a)).map(a => ({ ...a, aa: allergyAware(a) })).filter(a => a.aa.ok);
+  $('#focusBody').innerHTML = focus.length ? `<div class="card"><b>Tailored to your answers</b><ul class="focus snack-list">${focus.map(a => `<li>${esc(a.effect)}${allergyNotesHTML(a.aa.notes)}<div class="src">${evBadge(a)} ${srcLinks(a.sources)}</div></li>`).join('')}</ul></div>` : '';
 }
 
 /* ===== evidence-backed additions (values from data/targets.json, medas.json) ===== */
@@ -1116,7 +1123,7 @@ function renderNutri(es) {
   const el = $('#nutriBars'), out = [], d = viewDay;
   if (proteinActive()) { const pt = proteinTarget(d); if (pt) { const mp = mealProtein(es), hit = mp.filter(x => x >= pt.perMeal).length; out.push(bar('💪 Protein', sumNut(es, 'protein'), pt.min, 'g', '', `${pt.min}–${pt.max}`) + `<div class="sub nb-sub">${hit} of ${mp.length || 0} meals had ≥${pt.perMeal} g${isField(d) ? ' · field day: aim high' : ''} <span class="src">${evBadge(pt.t)} ${srcLinks(pt.t.sources)}</span></div>`); } }
   const so = T('sodium');
-  if (so) { const v = sumNut(es, 'sodium'); if (isField(d) && so.flagOnFieldDays === false) out.push(`<div class="sub nb-sub">🧂 Sodium ${Math.round(v)} mg · ${esc(so.fieldNote || '')}</div>`); else out.push(bar('🧂 Sodium', v, so.maxMgDesk, 'mg', v > so.maxMgDesk ? 'warn' : 'neutral') + `<div class="sub nb-sub">Stay under ${so.maxMgDesk.toLocaleString()} mg on desk days <span class="src">${evBadge(so)} ${srcLinks(so.sources)}</span></div>`); }
+  if (so) { const v = sumNut(es, 'sodium'); if (isField(d) && (so.flagOnFieldDays === false || so.maxMgField === null)) out.push(`<div class="sub nb-sub">🧂 Sodium ${Math.round(v)} mg · ${esc(so.fieldNote || '')}</div>`); else out.push(bar('🧂 Sodium', v, so.maxMgDesk, 'mg', v > so.maxMgDesk ? 'warn' : 'neutral') + `<div class="sub nb-sub">Stay under ${so.maxMgDesk.toLocaleString()} mg on desk days <span class="src">${evBadge(so)} ${srcLinks(so.sources)}</span></div>`); }
   const fb = fiberActive();
   if (fb.on) out.push(bar('🌾 Fiber', sumNut(es, 'fiber'), fb.t.minG, 'g') + `<div class="sub nb-sub">Aim ${fb.t.minG}–${fb.t.maxG}+ g. ${esc(fb.t.text || '')} <span class="src">${evBadge(fb.t)} ${srcLinks(fb.t.sources)}</span></div>`);
   else if (fb.paused) out.push(`<div class="sub nb-sub">🌾 Fiber goal paused while appetite is low: total food comes first.</div>`);
@@ -1127,21 +1134,27 @@ function renderHomeTips(es) {
   if (!today) { $('#homeTips').innerHTML = ''; return; }
   const rc = T('recovery'), kg = kgNow();
   if (rc && isField(new Date())) { const b2b = isField(addDays(new Date(), -1)) || isField(addDays(new Date(), 1)); const g = kg ? `${Math.round(rc.proteinGPerKgMin * kg)}–${Math.round(rc.proteinGPerKgMax * kg)} g` : `~${rc.proteinApproxG} g`;
-    out.push(`<div class="card tip"><b>🥾 Recovery meal within ~${rc.withinHours} h of finishing</b><div class="sub" style="color:var(--ink)">${esc(rc.text)} Protein: about ${g}.</div>${b2b ? `<div class="sub" style="color:var(--ink)">${esc(rc.backToBackText)}</div>` : `<button class="btn" id="tomorrowField" style="margin-top:8px">Field day tomorrow too?</button>`}<div class="src">${evBadge(rc)} ${srcLinks(rc.sources)}</div></div>`); }
+    const rr = rc.rapidRefuel, soon = S.settings.nextSessionSoon === dayKey(new Date());
+    const refuel = rr && soon ? (kg ? `${Math.round(rr.carbGPerKgPerHourMin * kg)}–${Math.round(rr.carbGPerKgPerHourMax * kg)} g carbohydrate per hour` : `${rr.carbGPerKgPerHourMin}–${rr.carbGPerKgPerHourMax} g/kg carbohydrate per hour`) + ` for the first ${rr.forHours} h after finishing.` : '';
+    out.push(`<div class="card tip"><b>🥾 Recovery meal within ~${rc.withinHours} h of finishing</b><div class="sub" style="color:var(--ink)">${esc(rc.text)} Protein: about ${g}.</div>${b2b ? `<div class="sub" style="color:var(--ink)">${esc(rc.backToBackText)}</div>` : ''}${rr ? (soon ? `<div class="sub" style="color:var(--ink)">⚡ Next session within ${rr.onlyIfNextSessionWithinHours} h: ${refuel}</div><button class="btn" id="soonOff" style="margin-top:6px">Not hiking again soon</button>` : `<button class="btn" id="soonOn" style="margin-top:8px">Hiking again within ${rr.onlyIfNextSessionWithinHours} h?</button>`) : ''}<div class="src">${evBadge(rc)} ${srcLinks(rc.sources)}</div></div>`); }
   const so = T('socialEating');
   if (so && lowAppetite()) out.push(`<div class="card tip"><b>👥 ${esc(so.text)}</b><div class="src">${evBadge(so)} ${srcLinks(so.sources)}</div></div>`);
   $('#homeTips').innerHTML = out.join('');
-  $('#tomorrowField') && ($('#tomorrowField').onclick = async () => { S.dailyActivity[dayKey(addDays(new Date(), 1))] = 'field'; await save('dailyActivity'); renderToday(); });
+  $('#soonOn') && ($('#soonOn').onclick = async () => { S.settings.nextSessionSoon = dayKey(new Date()); await save('settings'); renderToday(); });
+  $('#soonOff') && ($('#soonOff').onclick = async () => { S.settings.nextSessionSoon = null; await save('settings'); renderToday(); });
 }
 
 /* ---------- weight trend (smoothed) + safety signal ---------- */
 function smoothedWeights() { const w = [...S.weights].sort((a, b) => a.ts - b.ts); let ema = null; return w.map(x => { ema = ema == null ? x.kg : ema + 0.3 * (x.kg - ema); return { ts: x.ts, kg: x.kg, trend: r1(ema) }; }); }
 function weightLoss() {
   const t = T('weightAlert'); const sw = smoothedWeights(); if (!t || sw.length < 2) return null;
-  const since = Date.now() - (t.months || 6) * 30.44 * 86400000, win = sw.filter(x => x.ts >= since); if (win.length < 2) return null;
-  const peak = Math.max(...win.map(x => x.trend)), now = win[win.length - 1].trend, pct = r1(100 * (peak - now) / peak);
-  const intended = (S.profile && (S.profile.goals || []).includes('lose-weight'));
-  return { pct, alert: !intended && pct > t.lossPct, months: t.months };
+  const now = sw[sw.length - 1], m6 = Date.now() - (t.months || 6) * 30.44 * 86400000;
+  const win = sw.filter(x => x.ts >= m6), peak6 = win.length >= 2 ? Math.max(...win.map(x => x.trend)) : null;
+  const peakAll = Math.max(...sw.map(x => x.trend));
+  const pct6 = peak6 ? r1(100 * (peak6 - now.trend) / peak6) : 0, pctAll = r1(100 * (peakAll - now.trend) / peakAll);
+  const intended = t.excludeIfIntendedLoss !== false && (S.profile && (S.profile.goals || []).includes('lose-weight'));
+  const hit6 = pct6 > t.lossPct, hitLong = t.lossPctBeyond6Months != null && pctAll > t.lossPctBeyond6Months;
+  return { pct: hit6 ? pct6 : pctAll > pct6 ? pctAll : pct6, pct6, pctAll, alert: !intended && (hit6 || hitLong), months: hit6 || !hitLong ? t.months : 'more than ' + t.months, text: t.text || null };
 }
 
 /* ---------- pace-aware steps (data/pace.json): self-chosen, cue-tied, slow ---------- */
@@ -1239,22 +1252,24 @@ function renderFocusGoal() {
 function focusExport() { const j = journey(); return { journey: j ? { phase: j.phase, weeksInPhase: j.weeksIn, since: j.since } : null, steps: S.mySteps.map(s => ({ id: s.id, text: s.text, cue: s.cue, target: s.target, startWeek: s.startWeek, status: stepStatus(s), weeks: stepWeeks(s).map(w => ({ week: w.week, daysMet: w.daysMet, met: w.met })) })) }; }
 
 /* ---------- MEDAS 14-item check (data/medas.json) ---------- */
+function medasMax() { const it = medasItems() || []; const all = it.reduce((a, x) => a + (x.points ?? 1), 0); return S.settings.nonDrinker ? all - it.filter(x => x.excludeFromSuggestions && /wine|alcohol/i.test(x.id + x.short)).reduce((a, x) => a + (x.points ?? 1), 0) : all; }
 function medasItems() { const M = R.medas; return M && Array.isArray(M.items) && hasSrc(M) ? M.items : null; }
 function renderMedas() {
   const el = $('#medasCard'), items = medasItems(), last = S.medas[S.medas.length - 1];
   if (!items) { el.innerHTML = `<div class="placeholder"><b>🫒 Mediterranean score (MEDAS, 14 items)</b>A 2-minute check every 2 weeks, with a trend line. Questions are coming from research (U.S.-adapted wording).</div>`; return; }
   const due = !last || Date.now() - new Date(last.date).getTime() >= 13.5 * 86400000;
   const pts = S.medas.map((m, i) => m.score);
-  el.innerHTML = `<div class="card"><b>🫒 Mediterranean score</b>${last ? ` <span class="sub">latest ${last.score}/${items.length}</span>` : ''}<div class="sub">Raw score and trend only.</div>${pts.length ? chartSVG(pts.slice(-6), null, 1) : ''}${due ? `<button class="btn primary big" id="medasStart">${last ? 'Time for your 2-week check' : 'Take the 2-minute check'}</button>` : `<div class="sub">Next check ${fmtDay(addDays(new Date(last.date), 14))}.</div>`}${last ? medasNoTips(last) : ''}<div class="src">${evBadge(R.medas)} ${srcLinks(R.medas.sources)}</div><form id="medasForm" hidden></form></div>`;
+  el.innerHTML = `<div class="card"><b>🫒 Mediterranean score</b>${last ? ` <span class="sub">latest ${last.score}/${medasMax()}</span>` : ''}<div class="sub">Raw score and how it changes over time. There's no pass/fail line.</div><label class="check"><input type="checkbox" id="nonDrinker"${S.settings.nonDrinker ? ' checked' : ''}> I don't drink alcohol (max is 13, and that's fine)</label>${pts.length ? chartSVG(pts.slice(-6), null, 1) : ''}${due ? `<button class="btn primary big" id="medasStart">${last ? 'Time for your 2-week check' : 'Take the 2-minute check'}</button>` : `<div class="sub">Next check ${fmtDay(addDays(new Date(last.date), 14))}.</div>`}${last ? medasNoTips(last) : ''}<div class="src">${evBadge(R.medas)} ${srcLinks(R.medas.sources)}</div><form id="medasForm" hidden></form></div>`;
+  $('#nonDrinker').onchange = async e => { S.settings.nonDrinker = e.target.checked; await save('settings'); renderMedas(); };
   $('#medasStart') && ($('#medasStart').onclick = () => {
     const f = $('#medasForm'); f.hidden = false; $('#medasStart').hidden = true;
     f.innerHTML = items.map(it => `<div class="q"><div class="qt">${esc(it.text)}</div><div class="slot-btns"><label class="opt"><input type="radio" name="m_${esc(it.id)}" value="yes"> Yes</label><label class="opt"><input type="radio" name="m_${esc(it.id)}" value="no"> No</label></div></div>`).join('') + `<button class="btn primary big">Save</button>`;
-    f.onsubmit = async e => { e.preventDefault(); const fd = new FormData(f), answers = {}; items.forEach(it => answers[it.id] = fd.get('m_' + it.id)); const score = items.filter(it => answers[it.id] === (it.pointWhen || 'yes')).length; S.medas.push({ date: new Date().toISOString(), answers, score, of: items.length, version: R.medas.version ?? null }); await save('medas'); renderMedas(); toast('Score saved: ' + score + '/' + items.length); };
+    f.onsubmit = async e => { e.preventDefault(); const fd = new FormData(f), answers = {}; items.forEach(it => answers[it.id] = fd.get('m_' + it.id)); const score = items.reduce((a, it) => a + (answers[it.id] === (it.pointWhen || 'yes') ? (it.points ?? 1) : 0), 0); S.medas.push({ date: new Date().toISOString(), answers, score, of: medasMax(), version: R.medas.version ?? null }); await save('medas'); renderMedas(); toast('Score saved: ' + score + '/' + medasMax()); };
   });
 }
-function medasNoTips(last) { const items = medasItems() || []; const misses = items.filter(it => last.answers[it.id] && last.answers[it.id] !== (it.pointWhen || 'yes') && !it.noTip && !/wine|alcohol/i.test(it.id + ' ' + (it.group || '')));
-  if (!misses.length) return ''; return `<details class="more"><summary>Ideas for next time (${misses.length})</summary><ul class="snack-list">${misses.map(it => { const sw = it.foodId ? swapsFor({ foodId: it.foodId }) : null; const g = it.group && R.foods.filter(f => f.group === it.group && f.rating === 'eat-freely' && hasSrc(f) && !foodBlocked(f)).slice(0, 3).map(f => f.name).join(', ');
-    return `<li><b>${esc(it.short || it.text)}</b>${it.tip ? `<div>${esc(it.tip)}</div>` : ''}${g ? `<div class="sub">Try: ${esc(g)}</div>` : ''}${sw && sw.items.length ? `<div class="sub">Swap: ${sw.items.map(a => esc(a.name)).join(', ')}</div>` : ''}</li>`; }).join('')}</ul></details>`; }
+function medasNoTips(last) { const items = medasItems() || []; const misses = items.filter(it => last.answers[it.id] && last.answers[it.id] !== (it.pointWhen || 'yes') && !it.noTip && !it.excludeFromSuggestions).map(it => ({ ...it, aa: allergyAware(it) })).filter(it => it.aa.ok);
+  if (!misses.length) return ''; return `<details class="more"><summary>Ideas for next time (${misses.length})</summary><ul class="snack-list">${misses.map(it => { const sw = it.foodId ? swapsFor({ foodId: it.foodId, group: R.foodById[it.foodId] && R.foodById[it.foodId].group }) : null; const g = it.group && R.foods.filter(f => f.group === it.group && f.rating === 'eat-freely' && hasSrc(f) && !foodBlocked(f)).slice(0, 3).map(f => f.name).join(', ');
+    return `<li><b>${esc(it.short || it.text)}</b>${it.tip ? `<div>${esc(it.tip)}</div>` : ''}${allergyNotesHTML(it.aa.notes)}${g ? `<div class="sub">Try: ${esc(g)}</div>` : ''}${sw && sw.items.length ? `<div class="sub">Swap: ${sw.items.map(a => esc(a.name)).join(', ')}</div>` : ''}</li>`; }).join('')}</ul></details>`; }
 
 /* ---------- sodium top sources (desk days) ---------- */
 function renderSodium() {
@@ -1267,3 +1282,14 @@ function renderSodium() {
 function socialSummary(from) { const es = S.entries.filter(e => e.ts >= from.getTime()); const days = {}; es.forEach(e => { const k = dayKey(e.ts); days[k] = days[k] || { kcal: 0, social: false }; days[k].kcal += entryKcal(e) || 0; if (e.social) days[k].social = true; });
   const a = Object.values(days), s = a.filter(d => d.social), n = a.filter(d => !d.social), avg = x => x.length ? Math.round(x.reduce((p, d) => p + d.kcal, 0) / x.length) : null;
   return { socialEntries: es.filter(e => e.social).length, avgKcalDaysWithSharedMeal: avg(s), avgKcalOtherDays: avg(n) }; }
+
+/* ---------- allergen-aware guidance text (allergens[] + alternativesIfAllergic) ---------- */
+function allergyAware(obj) { // -> { ok, notes[] } ; ok=false means hide the item
+  const ua = userAllergens(); if (!obj || !ua.length) return { ok: true, notes: [] };
+  const tags = (obj.allergens || []).map(normAllergen), alts = obj.alternativesIfAllergic || {}, notes = [];
+  for (const a of ua) { if (!tags.includes(a) && !(a === 'wheat' && (obj.allergens || []).includes('gluten'))) continue;
+    const txt = alts[a] || (a === 'wheat' ? alts.gluten || alts.wheat : null) || Object.entries(alts).find(([k]) => normAllergen(k) === a)?.[1];
+    if (!txt) return { ok: false, notes: [] }; notes.push({ a, txt }); }
+  return { ok: true, notes };
+}
+const allergyNotesHTML = n => n.map(x => `<div class="allergy-alt">🚫 ${esc(ALLERGENS[x.a] || x.a)} allergy: ${esc(x.txt)}</div>`).join('');

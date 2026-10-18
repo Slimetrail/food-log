@@ -1,6 +1,6 @@
 {
- "version": "387c3cf105",
- "updatedAt": "2026-10-18T02:44:04.958Z",
+ "version": "57cbfd6c4d",
+ "updatedAt": "2026-10-18T03:14:38.300Z",
  "files": {
   "foods.json": {
    "version": "2026-10-17",
@@ -19,13 +19,13 @@
   },
   "weekly-plan.json": {
    "version": "2026-10-17",
-   "revision": null,
-   "bytes": 6154
+   "revision": 2,
+   "bytes": 7932
   },
   "meal-timing.json": {
    "version": "2026-10-17",
-   "revision": null,
-   "bytes": 9054
+   "revision": 2,
+   "bytes": 11524
   },
   "alternatives.json": {
    "version": "2026-10-17",
@@ -34,18 +34,23 @@
   },
   "questionnaire.json": {
    "version": "2026-10-17",
-   "revision": 2,
-   "bytes": 37134
+   "revision": 3,
+   "bytes": 44447
   },
   "habits.json": {
    "version": "2026-10-17",
-   "revision": 2,
-   "bytes": 18029
+   "revision": 3,
+   "bytes": 25564
   },
   "targets.json": {
-   "version": "2026-10-17-seed",
-   "revision": null,
-   "bytes": 3640
+   "version": "2026-10-17",
+   "revision": 1,
+   "bytes": 11550
+  },
+  "medas.json": {
+   "version": "2026-10-17",
+   "revision": 1,
+   "bytes": 29801
   },
   "pace.json": {
    "version": "2026-10-17",
