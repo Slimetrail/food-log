@@ -52,6 +52,10 @@ try:
     else:
       pg.click('#qtyPlus'); ok('stepper +0.5 serving', pg.input_value('#ffQty') == '1.5'); pg.click('#qtyMinus')
     pg.evaluate("document.querySelector('#foodForm').scrollIntoView()"); shot(pg, '04-barcode-result-nutella')
+    ok('Nutella (no researched swap) shows Research is finding box', pg.is_visible('#foodForm .needs-research') and 'Research is finding real alternatives' in pg.inner_text('#foodForm .needs-research'))
+    ok('no generic group picks', pg.locator('#foodForm .swaps:not(.needs-research)').count() == 0)
+    q = pg.evaluate("__fl.S.queue.filter(q=>q.barcode==='3017620422003')"); ok('Nutella queued needsSwap with categories+NOVA', len(q) == 1 and q[0].get('needsSwap') and q[0]['offCategories'] and q[0].get('nova_group') == 4)
+    pg.evaluate("document.querySelector('#foodForm .needs-research').scrollIntoView({block:'center'})"); shot(pg, '18-needs-research')
     pg.evaluate("document.querySelector('#ffWhen').value=(()=>{const d=new Date(Date.now()-3*3600e3-17*60e3);d.setMinutes(d.getMinutes()-d.getTimezoneOffset());return d.toISOString().slice(0,16)})()")
     pg.click('#ffSave'); pg.wait_for_selector('#s-today:not([hidden])')
     ok('entry saved', pg.evaluate('__fl.S.entries.length') == 1)
@@ -90,8 +94,10 @@ try:
     pg.fill('#ffName', 'TEST label (not saved)'); pg.evaluate("document.querySelector('#m-label').scrollIntoView()"); shot(pg, '06-label-photo-ocr')
     pg.evaluate("document.querySelector('#foodForm').scrollIntoView()"); shot(pg, '06b-label-ocr-confirm-form')
     pg.evaluate("(()=>{const g=document.querySelector('#ffGroup'),n=document.querySelector('#ffNova');g.closest('details')&&(g.closest('details').open=true);g.value='whole-grains';n.value='4';g.dispatchEvent(new Event('change'))})()"); pg.wait_for_timeout(300)
-    ok('label photo shows Better swaps', pg.is_visible('#foodForm .swaps')); print('SWAPS15', pg.inner_text('#foodForm .swaps') if pg.is_visible('#foodForm .swaps') else None)
-    pg.evaluate("document.querySelector('#foodForm .swaps').scrollIntoView({block:'start'});scrollBy(0,-90)"); shot(pg, '15-photo-label-swaps')
+    ok('label photo NOVA 4 without researched swap -> research box', pg.is_visible('#foodForm .needs-research'))
+    ok('label photo queued needsSwap', pg.evaluate("__fl.S.queue.some(q=>q.source==='label-photo'&&q.needsSwap&&q.nova_group===4)"))
+    pg.evaluate("document.querySelector('#foodForm .needs-research').scrollIntoView({block:'center'})"); shot(pg, '15-photo-label-needs-research')
+    pg.evaluate("__fl.S.queue=__fl.S.queue.filter(q=>q.source!=='label-photo');__fl.save('queue')")
     pg.click('#ffCancel')
     # eating out screen + quick re-log
     pg.click('.seg-btn[data-mode=out]'); pg.evaluate('scrollTo(0,0)'); shot(pg, '07-add-quick-relog-eating-out')
@@ -129,6 +135,13 @@ try:
     g = pg.evaluate('__fl.S.grocery'); ok('swap ingredients added with backups, allergy item replaced by backup', any(x['name']=='TEST chickpeas' and x['backups']==['TEST white beans'] for x in g) and any(x['name']=='TEST olive oil' for x in g) and not any('tahini' in x['name'] for x in g))
     ok('backup shown on grocery list', 'If out: TEST white beans' in pg.inner_text('#groceryList'))
     pg.evaluate("__fl.S.grocery=__fl.S.grocery.filter(x=>!x.name.startsWith('TEST'));__fl.save('grocery')")
+    ok('duplicate barcode not re-queued', pg.evaluate("__fl.S.queue.filter(q=>q.barcode==='3017620422003').length") == 1)
+    ok('weekly export includes needsSwap items', pg.evaluate("__fl.weeklyExport().researchQueue.some(q=>q.barcode==='3017620422003'&&q.needsSwap)"))
+    pg.evaluate("__fl.S.queue.find(q=>q.barcode==='3017620422003').status='sent'"); ok('needsSwap items re-exported after send', pg.evaluate("__fl.weeklyExport().researchQueue.some(q=>q.barcode==='3017620422003')"))
+    # simulate a research update arriving with a swap for this category (TEST entry, removed after)
+    pg.evaluate("__fl.R.swaps.push({_test:1,fromOffCategories:['en:confectionary-based-spreads'],fromDescription:'TEST',alternatives:[{foodId:'peanut-butter-natural',name:'TEST',sources:[{title:'TEST'}]}]});__fl.resolveSwapQueue()")
+    ok('needsSwap cleared when researched swap arrives', pg.evaluate("(()=>{const q=__fl.S.queue.find(q=>q.barcode==='3017620422003');return q.needsSwap===false&&!!q.swapResolvedAt})()"))
+    pg.evaluate("__fl.R.swaps=__fl.R.swaps.filter(s=>!s._test)")
     pg.click('#storeClose')
     pg.click('.tabs [data-tab=progress]'); pg.wait_for_timeout(300)
     if pg.is_visible('#stepPick button'):
@@ -170,5 +183,12 @@ try:
     b.close()
 finally:
   srv.terminate()
+import tempfile
+d = tempfile.mkdtemp(); inp, outp = f'{d}/in.json', f'{d}/q.json'
+json.dump({'items': [{'barcode': '1', 'name': 'old', 'offCategories': ['en:x']}]}, open(outp, 'w'))
+json.dump({'researchQueue': [{'barcode': '1', 'name': 'old', 'needsSwap': True, 'offCategories': ['en:x'], 'nova_group': 4}, {'barcode': '2', 'name': 'new', 'needsSwap': True, 'offCategories': ['en:y'], 'nova_group': 3}]}, open(inp, 'w'))
+subprocess.run(['node', f'{ROOT}/scripts/merge-scan-queue.js', inp, outp], check=True)
+q = json.load(open(outp))['items']
+ok('merge-scan-queue copies needsSwap+categories, updates existing', len(q) == 2 and all(i['needsSwap'] for i in q) and q[1]['offCategories'] == ['en:y'] and q[0]['nova_group'] == 4 and 'researchTask' in q[1])
 print('console errors:', errs[:10])
 print(f"{sum(c for _, c in R)}/{len(R)} passed")

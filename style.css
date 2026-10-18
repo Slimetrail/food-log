@@ -233,3 +233,4 @@ details.cite[open]{display:block;width:100%;background:#f6f8f4;border-radius:8px
 .swap-ask{font-weight:600;margin-top:4px}
 .swaps .btn.swap-add,.swaps .btn.swap-it{display:block;width:100%;min-height:48px;margin-top:6px;font-size:16px}
 #groceryList .backup{display:block;font-size:14px;color:#6b7280}
+.swaps.needs-research{background:#eef4ff;border-color:#c7d7f5}
