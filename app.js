@@ -44,7 +44,7 @@ async function loadResearch() {
   const idx = await getJSON('data/index.json');
   R.index = idx;
   const files = (idx && idx.files) || {};
-  const want = { foods: 'foods.json', meals: 'meals.json', groups: 'groups.json', weekly: 'weekly-plan.json', timing: 'meal-timing.json', swaps: 'alternatives.json', quiz: 'questionnaire.json', habits: 'habits.json', hydration: 'hydration.json', targets: 'targets.json', medas: 'medas.json', pace: 'pace.json', groceryLists: 'grocery-lists.json' };
+  const want = { seasonal: 'seasonal.json', foods: 'foods.json', meals: 'meals.json', groups: 'groups.json', weekly: 'weekly-plan.json', timing: 'meal-timing.json', swaps: 'alternatives.json', quiz: 'questionnaire.json', habits: 'habits.json', hydration: 'hydration.json', targets: 'targets.json', medas: 'medas.json', pace: 'pace.json', groceryLists: 'grocery-lists.json' };
   await Promise.all(Object.entries(want).map(async ([k, f]) => {
     if (idx && !files[f]) { R[k] = ['foods', 'meals', 'swaps'].includes(k) ? [] : null; return; }
     const j = await getJSON('data/' + f);
@@ -155,12 +155,12 @@ document.addEventListener('click', e => { const w = e.target.closest('#walmartCa
 function mealsWithFood(foodId) {
   if (!foodId) return []; const wk = weekKey(new Date()), wd = weekPlanDays();
   const planned = new Set([...S.toCook.filter(t => !t.week || t.week === wk).map(t => t.mealId), ...wd.flatMap(d => Object.values(d.meals))]);
-  return R.meals.filter(m => hasSrc(m) && (m.ingredients || []).some(i => i.foodId === foodId) && !mealBlocked(m) && !planned.has(m.id)).slice(0, 4);
+  return seasonSort(R.meals.filter(m => hasSrc(m) && (m.ingredients || []).some(i => i.foodId === foodId) && !mealBlocked(m) && !planned.has(m.id))).slice(0, 4);
 }
 function mealSuggestHTML(a) {
   const ms = mealsWithFood(a.foodId); const nm = (a.food && a.food.name) || a.name;
   if (!ms.length) return `<div class="meal-sug"><b>🍽️ Meals you can make with this</b><div class="sub">No other research meals use ${esc(nm)} that aren't already planned this week.</div></div>`;
-  return `<div class="meal-sug"><b>🍽️ Meals you can make with this</b><div class="sub">Research meals using ${esc(nm)}</div>${ms.map(m => `<div class="sug-row"><span>${esc(m.name)}${costTag(m)}${m.nutritionApprox && m.nutritionApprox.kcal != null ? ` <span class="sub">· ~${esc(m.nutritionApprox.kcal)} kcal</span>` : ''}</span><button type="button" class="btn big" data-addmeal="${esc(m.id)}">➕ Add this meal</button></div>`).join('')}</div>`;
+  return `<div class="meal-sug"><b>🍽️ Meals you can make with this</b><div class="sub">Research meals using ${esc(nm)}</div>${ms.map(m => `<div class="sug-row"><span>${esc(m.name)}${costTag(m)}${inSeasonTag(m)}${m.nutritionApprox && m.nutritionApprox.kcal != null ? ` <span class="sub">· ~${esc(m.nutritionApprox.kcal)} kcal</span>` : ''}</span><button type="button" class="btn big" data-addmeal="${esc(m.id)}">➕ Add this meal</button></div>`).join('')}</div>`;
 }
 async function addMealThisWeek(id) {
   const m = mealById(id) || R.meals.find(x => x.id === id); if (!m) return;
@@ -450,7 +450,7 @@ function fillProfile() {
   $$('.goals input').forEach(c => c.checked = p.goals ? p.goals.includes(c.value) : c.value === 'eat-more-mediterranean');
   $('#pfGoalsText').value = p.goalsText || ''; $$('#pfAllergens button').forEach(b => b.classList.toggle('on', (p.allergies || []).includes(b.dataset.al))); $('#pfAvoid').value = (p.avoidFoods || []).join(', ');
   $('#pfTarget').value = p.calorieTarget ?? S.settings.targetMin ?? '';
-  const st = p.store || {}; $('#pfStoreChain').value = st.chain || ''; $('#pfStoreCity').value = st.city || ''; $('#pfStoreState').value = st.state || ''; $('#pfStoreInStore').checked = st.inStoreOnly !== false;
+  $('#pfZip').value = p.zip || ''; $('#pfHomeState').innerHTML = '<option value="">State…</option>' + US_STATES.map(x => `<option>${x}</option>`).join(''); $('#pfHomeState').value = p.homeState || zipToState(p.zip) || (p.store && p.store.state ? String(p.store.state).toUpperCase() : '') || ''; const st = p.store || {}; $('#pfStoreChain').value = st.chain || ''; $('#pfStoreCity').value = st.city || ''; $('#pfStoreState').value = st.state || ''; $('#pfStoreInStore').checked = st.inStoreOnly !== false;
   for (const sl of ['breakfast', 'lunch', 'dinner']) { const T = R.timing || {}; const el = $('#pfTime_' + sl); el.value = (S.settings.mealTimes || {})[sl] || T[sl + 'Hour'] || ''; }
   $('#pfCancel').hidden = !S.profile; $('#pfErr').textContent = '';
 }
@@ -468,7 +468,7 @@ $('#profileForm').onsubmit = async e => {
   if (errs.length) { $('#pfErr').textContent = 'Please fill in: ' + errs.join(', '); return; }
   const p = { sex: $('#pfSex').value, birthDate, ageYears: null, heightCm: r1(heightCm), weightKg: r1(weightKg), activityLevel: $('#pfAct').value || null,
     goals: $$('.goals input:checked').map(c => c.value), goalsText: $('#pfGoalsText').value.trim(), allergies: $$('#pfAllergens button.on').map(b => b.dataset.al), avoidFoods: csv($('#pfAvoid').value),
-    calorieTarget: num($('#pfTarget').value), store: readStore(), updatedAt: new Date().toISOString() };
+    calorieTarget: num($('#pfTarget').value), store: readStore(), zip: ($('#pfZip').value.match(/\d{5}/) || [''])[0] || null, homeState: $('#pfHomeState').value || zipToState($('#pfZip').value) || null, updatedAt: new Date().toISOString() };
   p.ageYears = birthDate ? ageFrom(p) : Math.round(ageIn);
   { const T = R.timing || {}, mt = {}; for (const sl of ['breakfast', 'lunch', 'dinner']) { const v = $('#pfTime_' + sl).value; if (v && v !== T[sl + 'Hour']) mt[sl] = v; } S.settings.mealTimes = Object.keys(mt).length ? mt : null; }
   const first = !S.profile; S.profile = p; if (p.calorieTarget) S.settings.targetMin = p.calorieTarget; await save('profile', 'settings');
@@ -567,13 +567,13 @@ function pantryUseEntry(en) { if (!en) return; if (en.mealId) { const m = R.meal
 const pantryAge = (p, now = Date.now()) => Math.floor((now - (p.lastUsedAt || p.acquiredAt)) / DAY_MS);
 function pantryDue(now = Date.now()) { return S.pantry.filter(p => pantryAge(p, now) >= PANTRY_DAYS && !(p.snoozeUntil && p.snoozeUntil > now)).sort((a, b) => (a.lastUsedAt || a.acquiredAt) - (b.lastUsedAt || b.acquiredAt)); }
 const minsOf = m => (m.tags || []).includes('quick') ? 0 : 1, tierOf = m => (m.costTier || '$$$$').length;
-function pantryRecipes(p) { return library().filter(m => m.origin === 'research' && (m.ingredients || []).some(i => pantryMatches(p, i))).sort((a, b) => tierOf(a) - tierOf(b) || minsOf(a) - minsOf(b) || (a.costPerServingUSD ?? 99) - (b.costPerServingUSD ?? 99)).slice(0, 3); }
+function pantryRecipes(p) { const so = seasonOn(), ss = m => so ? (seasonShare(m) ?? 0) : 0; return library().filter(m => m.origin === 'research' && (m.ingredients || []).some(i => pantryMatches(p, i))).sort((a, b) => tierOf(a) - tierOf(b) || ss(b) - ss(a) || minsOf(a) - minsOf(b) || (a.costPerServingUSD ?? 99) - (b.costPerServingUSD ?? 99)).slice(0, 3); }
 function pantryBannerHTML() {
   const p = pantryDue()[0]; if (!p) return '';
   const recs = pantryRecipes(p);
   if (!recs.length && !S.queue.some(q => q.needsRecipe && q.pantryKey === p.key)) { S.queue.push({ name: p.name, foodId: p.foodId, pantryKey: p.key, needsRecipe: true, source: 'pantry-nudge', status: 'pending', scannedAt: new Date().toISOString() }); save('queue'); }
   return `<div class="card pantry-nudge" id="pantryNudge" data-pid="${p.id}"><b>🥫 ${esc(p.name)}: not used in ${pantryAge(p)} days</b>
-    ${recs.length ? `<div class="sub">Recipes that use it:</div>${recs.map(m => `<button type="button" class="btn big pn-rec" data-meal="${esc(m.id)}">${esc(m.name)}${costTag(m)}</button>`).join('')}` : '<div class="sub">No research recipe uses this yet. Asked research to add one.</div>'}
+    ${recs.length ? `<div class="sub">Recipes that use it:</div>${recs.map(m => `<button type="button" class="btn big pn-rec" data-meal="${esc(m.id)}">${esc(m.name)}${costTag(m)}${inSeasonTag(m)}</button>`).join('')}` : '<div class="sub">No research recipe uses this yet. Asked research to add one.</div>'}
     <div class="row"><button type="button" class="btn" data-pn="snooze">Dismiss for a week</button><button type="button" class="btn" data-pn="gone">I don't have it anymore</button></div></div>`;
 }
 function renderPantryNudge() { const el = $('#pantryNudgeBox'); if (el) el.innerHTML = pantryBannerHTML(); }
@@ -1034,7 +1034,7 @@ function makeOptions(day, prev) {
   const lib = library(); day.options = day.options || {};
   for (const slot of SLOTS) {
     const pool = lib.filter(m => slotOf(m) === slot); if (!pool.length) { delete day.options[slot]; continue; }
-    const fresh = shuffle(pool.filter(m => !(prev && Object.values(prev.meals).includes(m.id))));
+    const fresh = seasonSort(shuffle(pool.filter(m => !(prev && Object.values(prev.meals).includes(m.id)))), 0.6);
     const opts = (fresh.length ? fresh : shuffle(pool)).slice(0, 4).map(m => m.id);
     if (day.meals[slot] && !opts.includes(day.meals[slot])) opts[opts.length >= 4 ? 3 : opts.length] = day.meals[slot];
     day.options[slot] = opts;
@@ -1183,6 +1183,37 @@ $('#voiceText').oninput = () => { if (vc) vc.text = $('#voiceText').value; };
 window.addEventListener('online', renderVoiceQueue); window.addEventListener('offline', renderVoiceQueue);
 addMics();
 
+
+/* ---------- seasonal produce (research data/seasonal.json; ZIP prefix -> state offline, no GPS) ---------- */
+// 3-digit ZIP prefix ranges -> state. Source: USPS Publication 65 / National Five-Digit ZIP Code & Post Office Directory prefix table (see README).
+const ZIP3 = [[5,5,'NY'],[6,9,'PR'],[10,27,'MA'],[28,29,'RI'],[30,38,'NH'],[39,49,'ME'],[50,54,'VT'],[55,55,'MA'],[56,59,'VT'],[60,69,'CT'],[70,89,'NJ'],[100,149,'NY'],[150,196,'PA'],[197,199,'DE'],[200,200,'DC'],[201,201,'VA'],[202,205,'DC'],[206,219,'MD'],[220,246,'VA'],[247,268,'WV'],[270,289,'NC'],[290,299,'SC'],[300,319,'GA'],[320,339,'FL'],[341,349,'FL'],[350,369,'AL'],[370,385,'TN'],[386,397,'MS'],[398,399,'GA'],[400,427,'KY'],[430,458,'OH'],[460,479,'IN'],[480,499,'MI'],[500,528,'IA'],[530,549,'WI'],[550,567,'MN'],[569,569,'DC'],[570,577,'SD'],[580,588,'ND'],[590,599,'MT'],[600,629,'IL'],[630,658,'MO'],[660,679,'KS'],[680,693,'NE'],[700,714,'LA'],[716,729,'AR'],[730,732,'OK'],[733,733,'TX'],[734,749,'OK'],[750,799,'TX'],[800,816,'CO'],[820,831,'WY'],[832,838,'ID'],[840,847,'UT'],[850,865,'AZ'],[870,884,'NM'],[885,885,'TX'],[889,898,'NV'],[900,961,'CA'],[967,968,'HI'],[969,969,'GU'],[970,979,'OR'],[980,994,'WA'],[995,999,'AK']];
+const US_STATES = 'AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA PR RI SC SD TN TX UT VT VA WA WV WI WY'.split(' ');
+function zipInfo(zip) { const m = String(zip || '').match(/^\s*(\d{3})\d{0,2}/); if (!m) return null; const M = R.seasonal && R.seasonal.zipToState && R.seasonal.zipToState.map; const v = M && M[m[1]];
+  if (v) return typeof v === 'string' ? { state: v, alsoStates: [] } : { state: v.state, alsoStates: v.alsoStates || [] };
+  const n = +m[1]; const r = ZIP3.find(([a, b]) => n >= a && n <= b); return r ? { state: r[2], alsoStates: [] } : null; }
+function zipToState(zip) { const i = zipInfo(zip); return i ? i.state : null; }
+function myState() { const p = S.profile || {}; return (p.homeState || zipToState(p.zip) || (p.store && p.store.state) || '').toUpperCase() || null; }
+const SEASON_MONTHS = { spring: [3, 4, 5], summer: [6, 7, 8], fall: [9, 10, 11], autumn: [9, 10, 11], winter: [12, 1, 2] };
+// foodId -> {months, part}. Research shape: states[ST] {status, items[{foodId, months, partialMonths?, limitedMonths?}]}; no-data states fall back to national seasons[].
+function seasonTable(st) {
+  const D = R.seasonal; if (!D || !st) return null; const root = D.states || {}; let e = root[st], national = false;
+  if (!e || e.status === 'no-data' || !Array.isArray(e.items) || !e.items.length) { e = D.national; national = true; if (!e || !Array.isArray(e.items)) return null; }
+  const out = {};
+  for (const it of e.items) { if (!it || !it.foodId) continue; // null foodId: display-only
+    const ms = Array.isArray(it.months) ? it.months.map(Number) : (it.seasons || []).flatMap(x => SEASON_MONTHS[String(x).toLowerCase()] || []);
+    const part = [...(it.partialMonths || []), ...(it.limitedMonths || [])].map(Number);
+    const o = out[it.foodId] || (out[it.foodId] = { months: new Set(), part: new Set() }); ms.forEach(m => o.months.add(m)); part.forEach(m => o.part.add(m)); }
+  if (!Object.keys(out).length) return null; Object.defineProperty(out, '_national', { value: national }); return out;
+}
+const isProduce = i => { const f = i && i.foodId && R.foodById[i.foodId]; return !!f && ['vegetables', 'fruits'].includes(f.group); };
+function seasonShare(m, month = new Date().getMonth() + 1) { const T = seasonTable(myState()); if (!T) return null; const pr = (m.ingredients || []).filter(isProduce); if (!pr.length) return null; return pr.reduce((a, i) => { const o = T[i.foodId]; if (!o) return a; return a + (o.part.has(month) ? 0.5 : o.months.has(month) ? 1 : 0); }, 0) / pr.length; }
+const seasonOn = () => S.settings.preferSeason !== false && !!seasonTable(myState());
+const inSeasonTag = m => { if (!seasonTable(myState())) return ''; const s = seasonShare(m); return s != null && s >= 0.5 ? ' <span class="tag season">🌱 In season</span>' : ''; };
+// stable re-sort: in-season share first (ties keep the existing order). Out-of-season meals stay, just lower.
+function seasonSort(ms, jitter = 0) { if (!seasonOn()) return ms; return ms.map((m, k) => ({ m, k, s: (seasonShare(m) ?? 0) + Math.random() * jitter })).sort((a, b) => b.s - a.s || a.k - b.k).map(x => x.m); }
+function seasonNote() { if (!myState()) return 'Add your ZIP code or state in Profile to see what is in season.'; const T = seasonTable(myState()); if (!T) return 'Seasonal data not available for your state yet'; return T._national ? 'Seasonal data coming for your state (using national seasons for now)' : ''; }
+const seasonWhy = () => { const w = R.seasonal && R.seasonal.why; return w ? (typeof w === 'string' ? w : w.summary || '') : ''; };
+
 /* ---------- meal picker ---------- */
 let pickCtx = null;
 const mealAtStore = m => { if (!myStore()) return false; const ings = (m.ingredients || []).filter(i => !isPantry(i)); return ings.length > 0 && ings.every(i => { const a = storeAvail(storeFields(i)); return a && a.inStock; }); };
@@ -1196,10 +1227,12 @@ function renderPicker() {
   if (on('budget')) ms = ms.filter(m => m.costTier === '$');
   if (on('store')) ms = ms.filter(mealAtStore);
   if (tag) ms = ms.filter(m => (m.tags || []).includes(tag));
+  if (!q) ms = seasonSort(ms);
   const favs = q || on('quick') || on('budget') || on('store') || tag ? [] : favMeals(slot);
-  const row = m => { const w = sameDayWarn(m, d, slot); return `<li><button type="button" class="pick-row" data-pid="${esc(m.id)}"><span class="nm">${esc(m.name)}${costTag(m)}${m.origin === 'mine' ? ' <span class="tag">mine</span>' : ''}${m.origin === 'favorite' ? ' <span class="tag">⭐ favorite</span>' : ''}</span><span class="sub">${m.nutritionApprox && m.nutritionApprox.kcal != null ? '~' + esc(m.nutritionApprox.kcal) + ' kcal · ' : ''}${esc((m.tags || []).slice(0, 3).join(', '))}</span>${w ? `<span class="warn">⚠️ ${esc(w)} (you can still pick it)</span>` : ''}</button></li>`; };
+  const row = m => { const w = sameDayWarn(m, d, slot); return `<li><button type="button" class="pick-row" data-pid="${esc(m.id)}"><span class="nm">${esc(m.name)}${costTag(m)}${inSeasonTag(m)}${m.origin === 'mine' ? ' <span class="tag">mine</span>' : ''}${m.origin === 'favorite' ? ' <span class="tag">⭐ favorite</span>' : ''}</span><span class="sub">${m.nutritionApprox && m.nutritionApprox.kcal != null ? '~' + esc(m.nutritionApprox.kcal) + ' kcal · ' : ''}${esc((m.tags || []).slice(0, 3).join(', '))}</span>${w ? `<span class="warn">⚠️ ${esc(w)} (you can still pick it)</span>` : ''}</button></li>`; };
   $('#pickList').innerHTML = (ms.length ? ms.map(row).join('') : '<li class="sub">No meals match. Try fewer filters.</li>') + (favs.length ? `<li class="pick-h">⭐ Your favorites</li>` + favs.map(row).join('') : '');
-  const hidden = R.meals.filter(m => hasSrc(m) && slotOf(m) === slot && mealBlocked(m)).length; $('#pickNote').textContent = hidden ? `🚫 ${hidden} hidden for your allergies / foods to avoid` : '';
+  const hidden = R.meals.filter(m => hasSrc(m) && slotOf(m) === slot && mealBlocked(m)).length; $('#pickNote').textContent = [hidden ? `🚫 ${hidden} hidden for your allergies / foods to avoid` : '', seasonNote()].filter(Boolean).join(' · ');
+  $('#pickSeason').checked = S.settings.preferSeason !== false; $('#pickSeasonRow').hidden = !seasonTable(myState()); $('#pickWhy').hidden = !seasonTable(myState()) || !seasonWhy(); $('#pickWhyText').textContent = seasonWhy();
 }
 async function pickMeal(pid) {
   const { date, slot } = pickCtx; const d = S.plan.days.find(x => x.date === date);
@@ -1210,7 +1243,9 @@ async function pickMeal(pid) {
   if (weekApproved()) await approveWeek(true);
   $('#mealPicker').close(); renderPlan(); const again = $(`#planDays [data-date="${date}"]`); if (again) again.open = true;
 }
-$('#pickSearch').oninput = () => renderPicker(); $('#pickTag').onchange = () => renderPicker();
+$('#pickSearch').oninput = () => renderPicker(); $('#pickSeason').onchange = async () => { S.settings.preferSeason = $('#pickSeason').checked; await save('settings'); renderPicker(); };
+document.addEventListener('input', e => { if (e.target.id === 'pfZip') zipHint(); });
+function zipHint() { const i = zipInfo($('#pfZip').value); const h = $('#pfZipHint'); if (!i) { h.textContent = ''; return; } $('#pfHomeState').value = i.state; h.textContent = i.alsoStates.length ? `This ZIP area also covers ${i.alsoStates.join(', ')}. Pick your state below if it isn't ${i.state}.` : `State: ${i.state}`; } $('#pickTag').onchange = () => renderPicker();
 $('#pickFilters').onclick = e => { const b = e.target.closest('[data-f]'); if (!b) return; b.classList.toggle('on'); renderPicker(); };
 $('#pickList').onclick = e => { const b = e.target.closest('[data-pid]'); if (b) pickMeal(b.dataset.pid); };
 $('#pickClose').onclick = () => $('#mealPicker').close();
@@ -1326,7 +1361,7 @@ $('#installBtn').onclick = async () => { if (deferredPrompt) { deferredPrompt.pr
   if (!S.profile) { fillProfile(); show('profile'); } else show('today');
   resolvePending();
   document.addEventListener('visibilitychange', async () => { if (document.visibilityState === 'visible' && navigator.onLine) { await loadResearch(); if (curTab !== 'add' && curTab !== 'profile' && curTab !== 'quiz') show(curTab); } });
-  window.__fl = { mainFoods, mealById, library, S, R, save, show, weeklyExport, offLookup, parseLabel, lookupAndOpen, storeCheck, ensurePlan, addSwapToGrocery, renderPlan, renderPicker, parseIngredientText, startVoice, queueVoice, renderVoiceQueue, pantryUseEntry, pantryAdd, pantryUse, pantryDue, pantryRecipes, renderPantryNudge, renderPantryList, mealBlocked, weekPlanDays, researchWeekPlan, userAllergens, conflict, slotOf, migrateMealIds, mealHour, gInfo, walmartPick, satisfied, checkHolds, addMealThisWeek, approveWeek, weekKey, boughtState, markCooked, walmartCartUrl, renderGrocery, storeKey, availHTML, exportProfile, markScannedForToCook, planDaysAhead, saveToCook, renderToCook, tonightItem, dinnerHour, resolveSwapQueue, swapsFor };
+  window.__fl = { mainFoods, mealById, library, S, R, save, show, weeklyExport, offLookup, parseLabel, lookupAndOpen, storeCheck, ensurePlan, addSwapToGrocery, renderPlan, renderPicker, zipInfo, zipHint, zipToState, myState, seasonShare, seasonTable, seasonSort, makeOptions, mealSuggestHTML, parseIngredientText, startVoice, queueVoice, renderVoiceQueue, pantryUseEntry, pantryAdd, pantryUse, pantryDue, pantryRecipes, renderPantryNudge, renderPantryList, mealBlocked, weekPlanDays, researchWeekPlan, userAllergens, conflict, slotOf, migrateMealIds, mealHour, gInfo, walmartPick, satisfied, checkHolds, addMealThisWeek, approveWeek, weekKey, boughtState, markCooked, walmartCartUrl, renderGrocery, storeKey, availHTML, exportProfile, markScannedForToCook, planDaysAhead, saveToCook, renderToCook, tonightItem, dinnerHour, resolveSwapQueue, swapsFor };
 })();
 
 /* ---------- resolve offline-queued barcodes when back online ---------- */

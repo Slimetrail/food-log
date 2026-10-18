@@ -1,6 +1,6 @@
 {
- "version": "771d956079",
- "updatedAt": "2026-10-18T11:28:43.347Z",
+ "version": "1bbab0f1a7",
+ "updatedAt": "2026-10-18T11:54:47.112Z",
  "files": {
   "foods.json": {
    "version": "2026-10-17",
@@ -61,6 +61,11 @@
    "version": "2026-10-17",
    "revision": 5,
    "bytes": 208046
+  },
+  "seasonal.json": {
+   "version": "2026-10-17",
+   "revision": 1,
+   "bytes": 75342
   }
  }
 }

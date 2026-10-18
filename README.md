@@ -16,3 +16,8 @@ General wellness guidance, not medical advice.
 - `questionnaire.json` / `habits.json` / `medas.json`: an item whose `allergens[]` matches the user's allergies shows its `alternativesIfAllergic` text. If no alternative exists for that allergy, the item is hidden.
 - `weekly-plan.json` rev2: top-level `mealPlan` (with dates) is used before `referenceMenu`. Days before `weekOf` are auto-filled.
 - `meal-timing.json` rev2: desk countdown uses `countdown.dueAfterHours`/`latestHours` (3–4 h). Field days use the fueling interval (every 1 h on hikes over 1 h), the pre-hike meal window (1–4 h before) and recovery within 2 h. The user's own interval is used only when research gives no value.
+
+## In-season produce
+- `data/seasonal.json` comes from research (synced by `scripts/sync-data.js`, precached via `data/index.json`). If the file is missing or has no entry for the user's state, seasonal ranking switches off and the app says "Seasonal data not available for your state yet".
+- Location is optional: a ZIP code (mapped to a state on the phone, no network) or a state picker; it falls back to the My store state. No GPS.
+- ZIP→state uses the standard 3-digit ZIP prefix ranges published by USPS (Publication 65, *National Five-Digit ZIP Code and Post Office Directory*; the same table is summarized at https://en.wikipedia.org/wiki/List_of_ZIP_Code_prefixes). Military (AA/AE/AP) and unassigned prefixes return no state.

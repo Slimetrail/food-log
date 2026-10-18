@@ -37,6 +37,10 @@
       </div>
       <label>Other foods to avoid (comma separated)<input id="pfAvoid" placeholder="e.g. pork, cilantro"></label>
     </fieldset>
+    <fieldset class="goals where"><legend>🌱 Where you live (optional, for in-season produce)</legend>
+      <div class="row2"><label>ZIP code<input id="pfZip" inputmode="numeric" maxlength="5" placeholder="5 digits" autocomplete="postal-code"></label><label>State<select id="pfHomeState"></select></label></div>
+      <div class="sub" id="pfZipHint" role="status"></div><div class="sub">Stays on your phone. No GPS.</div>
+    </fieldset>
     <fieldset class="goals store"><legend>🏪 My store (optional)</legend>
       <label>Store chain<input id="pfStoreChain" list="storeChains" placeholder="e.g. Walmart" autocomplete="off"></label>
       <datalist id="storeChains"><option value="Walmart"><option value="Food Lion"><option value="Publix"><option value="Kroger"><option value="Aldi"><option value="Piggly Wiggly"><option value="Harris Teeter"><option value="Lidl"><option value="Target"><option value="Costco"></datalist>
@@ -300,7 +304,7 @@
 <dialog id="mealPicker"><div class="pick-head"><h2 id="pickTitle">Choose a meal</h2><button class="btn" id="pickClose">Close</button></div>
 <input id="pickSearch" type="search" placeholder="Search meals or ingredients" autocomplete="off">
 <div class="chips" id="pickFilters"><button type="button" data-f="quick">⚡ Quick</button><button type="button" data-f="budget">$ Budget</button><button type="button" data-f="store">🏪 At my store</button><select id="pickTag" aria-label="Tag"></select></div>
-<div class="sub" id="pickNote"></div><ul id="pickList" class="pick-list"></ul></dialog>
+<label class="check big-check" id="pickSeasonRow" hidden><input type="checkbox" id="pickSeason" checked> 🌱 Prefer in-season</label><details class="sub" id="pickWhy" hidden><summary>Why in-season?</summary><span id="pickWhyText"></span></details><div class="sub" id="pickNote"></div><ul id="pickList" class="pick-list"></ul></dialog>
 <dialog id="cookView"><div id="cookBody"></div></dialog>
 <dialog id="settings">
   <form method="dialog" class="dlg">

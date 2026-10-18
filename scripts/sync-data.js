@@ -5,7 +5,7 @@
 const fs = require('fs'), path = require('path');
 const SRC = process.argv[2] || '/workspace/mediterranean-research';
 const OUT = path.join(__dirname, '..', 'data');
-const FILES = ['foods.json', 'meals.json', 'groups.json', 'weekly-plan.json', 'meal-timing.json', 'alternatives.json', 'questionnaire.json', 'habits.json', 'hydration.json', 'targets.json', 'medas.json', 'pace.json', 'grocery-lists.json'];
+const FILES = ['foods.json', 'meals.json', 'groups.json', 'weekly-plan.json', 'meal-timing.json', 'alternatives.json', 'questionnaire.json', 'habits.json', 'hydration.json', 'targets.json', 'medas.json', 'pace.json', 'grocery-lists.json', 'seasonal.json'];
 const SEED = path.join(__dirname, '..', 'data-seed');
 fs.mkdirSync(OUT, { recursive: true });
 const files = {}; const versions = [];
