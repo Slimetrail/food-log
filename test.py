@@ -8,7 +8,7 @@ srv = subprocess.Popen([sys.executable, '-m', 'http.server', '8820'], cwd=ROOT, 
 URL = 'http://localhost:8820/'
 R = []; errs = []
 def ok(n, c): R.append((n, bool(c))); print(('PASS ' if c else 'FAIL ') + n, flush=True)
-def shot(pg, name, full=False): pg.evaluate("document.getElementById('toast').hidden=true"); pg.wait_for_timeout(300); pg.screenshot(path=f'{OUT}/{name}.png', full_page=full)
+def shot(pg, name, full=False, keep=False): keep or pg.evaluate("document.getElementById('toast').hidden=true"); pg.wait_for_timeout(300); pg.screenshot(path=f'{OUT}/{name}.png', full_page=full)
 try:
   with sync_playwright() as p:
     b = p.chromium.launch(executable_path='/usr/bin/google-chrome', args=['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'])
@@ -46,7 +46,7 @@ try:
     ok('phase 1 chip on home', 'Phase 1' in pg.inner_text('#homeAlerts'))
     # wait for SW precache
     pg.evaluate("navigator.serviceWorker.ready"); pg.wait_for_function("caches.keys().then(k=>k.length>0)")
-    pg.wait_for_function("caches.open('foodlog-v9').then(c=>c.match('vendor/tessdata/eng.traineddata.gz')).then(r=>!!r)", timeout=60000)
+    pg.wait_for_function("caches.open('foodlog-v10').then(c=>c.match('vendor/tessdata/eng.traineddata.gz')).then(r=>!!r)", timeout=60000)
     ok('service worker precached OCR data', True)
     # --- real Open Food Facts lookups ---
     pg.click('#bigAdd'); pg.wait_for_selector('#s-add:not([hidden])')
@@ -158,6 +158,26 @@ try:
     pg.click('#addBack'); pg.click('.tabs [data-tab=plan]')
     for nm, slot, ing in [('Grandma\'s bean soup (my meal)', 'dinner', '1 can beans\n1 onion\n1 can tomatoes')]:
       pg.click('#addMealBtn'); pg.fill('#mfName', nm); pg.select_option('#mfSlot', slot); pg.fill('#mfIng', ing); pg.click('#mealForm button.primary')
+    ok('plan starts empty (choose your own)', pg.evaluate("__fl.S.settings.planStyle") == 'choose' and pg.evaluate("__fl.planDaysAhead().every(d=>!Object.values(d.meals).some(Boolean))") and pg.locator('#planDays [data-pick]').count() >= 4)
+    # choose a meal via picker
+    pg.click('#planDays details >> nth=0 >> .plan-slot >> nth=2 >> [data-pick]'); pg.wait_for_selector('#mealPicker[open]')
+    ok('picker lists research dinners, allergy-filtered', pg.locator('#pickList [data-pid]').count() > 3 and pg.evaluate("[...document.querySelectorAll('#pickList [data-pid]')].every(b=>{const m=__fl.mealById(b.dataset.pid);return m&&!__fl.mealBlocked(m)})"))
+    pg.click('#pickFilters [data-f=budget]'); pg.wait_for_timeout(100)
+    ok('budget filter shows only $ meals', pg.evaluate("[...document.querySelectorAll('#pickList [data-pid]')].every(b=>{const m=__fl.mealById(b.dataset.pid);return m&&m.costTier==='$'})"))
+    pg.click('#pickFilters [data-f=budget]'); pg.fill('#pickSearch', 'mac'); pg.wait_for_timeout(100)
+    ok('search filters meals', pg.locator('#pickList [data-pid]').count() >= 1 and all('mac' in x.lower() or 'mac' in pg.evaluate(f"JSON.stringify(__fl.mealById({json.dumps(x)})||{{}})").lower() for x in pg.eval_on_selector_all('#pickList [data-pid]','els=>els.map(e=>e.dataset.pid)')))
+    pg.fill('#pickSearch', ''); pg.wait_for_timeout(100); shot(pg, '27b-choose-a-meal')
+    first = pg.get_attribute('#pickList [data-pid] >> nth=0', 'data-pid'); pg.click('#pickList [data-pid] >> nth=0'); pg.wait_for_timeout(300)
+    ok('picked meal set on that day/slot', pg.evaluate("__fl.planDaysAhead()[0].meals.dinner") == first)
+    # same meal for lunch? warn but allow: pick same main food meal not possible generically; check warn helper via second slot pick of same id
+    pg.evaluate(f"(()=>{{__fl.planDaysAhead()[0].meals.lunch={json.dumps(first)};__fl.renderPlan()}})()"); pg.evaluate("document.querySelector('#planDays details').open=true")
+    ok('same-day repeat is a warning, not a block', 'also planned for' in pg.inner_text('#planDays details >> nth=0'))
+    pg.click('#planDays details >> nth=0 >> .plan-slot >> nth=1 >> [data-rm]'); pg.wait_for_timeout(300)
+    ok('Remove clears the slot with Undo toast', not pg.evaluate("__fl.planDaysAhead()[0].meals.lunch") and pg.is_visible('#undoBtn'))
+    pg.evaluate("document.querySelector('#planDays details').open=true;document.querySelector('#planDays details').scrollIntoView({block:'start'});scrollBy(0,-90)"); shot(pg, '27c-plan-remove', keep=True)
+    pg.click('#undoBtn'); pg.wait_for_timeout(300); ok('Undo restores removed meal', pg.evaluate("__fl.planDaysAhead()[0].meals.lunch") == first)
+    pg.evaluate("delete __fl.planDaysAhead()[0].meals.lunch;__fl.save('plan')")
+    pg.click('#regenPlan'); pg.wait_for_timeout(300)
     plan = pg.evaluate('__fl.S.plan.days')
     rep = any(set(plan[i]['meals'].values()) & set(plan[i+1]['meals'].values()) for i in range(len(plan)-1)); ok('no meal on consecutive days', not rep)
     ok('3-4 options per slot', all(3 <= len(v) <= 4 for v in plan[0]['options'].values()))
@@ -166,15 +186,8 @@ try:
     ok('sesame-allergy meals hidden', pg.evaluate("__fl.library().every(m=>!(m.allergens||[]).includes('sesame'))"))
     pg.evaluate('scrollTo(0,0)'); shot(pg, '08-meal-planner')
     pg.evaluate("document.querySelector('#prepCard').scrollIntoView()"); shot(pg, '08b-meal-prep')
-    # (A) plan-first: picking a dinner in the planner saves it to To cook and adds ingredients to the grocery list
-    ids = pg.evaluate("(()=>{const d=__fl.planDaysAhead()[0];return [...document.querySelectorAll(`#planDays [data-date='${d.date}'] button[data-slot=dinner]`)].map(b=>b.dataset.id).filter(id=>id!==d.meals.dinner&&(((__fl.mealById(id)||{}).ingredients||[]).length))})()")
-    picked = None
-    for mid in ids:
-      pg.evaluate("document.querySelector('#planDays details').open=true")
-      pg.click(f"#planDays details >> nth=0 >> button[data-slot=dinner][data-id='{mid}']"); pg.wait_for_timeout(300)
-      if pg.evaluate(f"__fl.planDaysAhead()[0].meals.dinner==='{mid}'"): picked = mid; break
-    print('PICKED', picked, ids, pg.evaluate("__fl.S.toCook.map(x=>[x.mealId,x.plannedDay,x.ingredients.map(i=>i.name)])") if picked else None)
-    ok('planner dinner pick -> To cook (day+slot) + grocery ingredients', picked and pg.evaluate(f"(()=>{{const d=__fl.planDaysAhead()[0].date;const t=__fl.S.toCook.find(x=>x.mealId==='{picked}'&&x.plannedDay===d&&x.slot==='dinner');return !!t && t.ingredients.every(i=>__fl.S.grocery.some(g=>g.name===i.name))}})()"))
+    # (A) plan-first: chosen meals -> approve -> To cook (only what he chose)
+    pg.evaluate("__fl.S.toCook=[];__fl.save('toCook')")
     pg.evaluate("__fl.S.toCook=[];__fl.save('toCook')")
     pg.click('#planToGrocery'); pg.wait_for_selector('#s-grocery:not([hidden])')
     ok('planner meals saved to To cook with day/slot', pg.evaluate("__fl.S.toCook.length>0 && __fl.S.toCook.every(x=>x.source==='plan'&&x.plannedDay&&x.slot)"))
@@ -189,6 +202,42 @@ try:
     pg.evaluate("document.getElementById('walmartBox').scrollIntoView({block:'start'});scrollBy(0,-120)"); shot(pg, '21-walmart-cart')
     ok('buy hints on grocery list', 'Buy: ' in pg.inner_text('#groceryList'))
     pg.evaluate("[...document.querySelectorAll('#groceryList li')].find(li=>li.querySelector('.buy')&&li.querySelector('.avail.ok')).scrollIntoView({block:'start'});scrollBy(0,-90)"); shot(pg, '25-grocery-buy-hints')
+    # --- grocery Remove all / Clear checked with undo, plan Remove ungroceries ---
+    pg.evaluate("window._keep=JSON.stringify({g:__fl.S.grocery,t:__fl.S.toCook,p:__fl.S.plan,s:__fl.S.settings.planStyle})")
+    pg.evaluate("__fl.S.grocery=[{id:'t1',name:'TEST apples',done:false},{id:'t2',name:'TEST bread',done:true,doneAt:Date.now()}];__fl.save('grocery')")
+    pg.click('.tabs [data-tab=grocery]'); pg.wait_for_selector('#s-grocery:not([hidden])')
+    ok('Walmart cart note shown', 'open it in the Walmart app' in pg.inner_text('#s-grocery'))
+    pg.click('#clearChecked'); pg.wait_for_timeout(200)
+    ok('Clear checked removes only checked', pg.evaluate("__fl.S.grocery.map(g=>g.name).join()") == 'TEST apples' and pg.is_visible('#undoBtn'))
+    pg.click('#undoBtn'); pg.wait_for_timeout(200); ok('Undo restores checked', pg.evaluate("__fl.S.grocery.length") == 2)
+    pg.once('dialog', lambda d: d.dismiss()); pg.click('#clearAll'); pg.wait_for_timeout(200)
+    ok('Remove all asks first (cancel keeps list)', pg.evaluate("__fl.S.grocery.length") == 2)
+    pg.once('dialog', lambda d: d.accept()); pg.click('#clearAll'); pg.wait_for_timeout(200)
+    ok('Remove all empties list + Undo toast', pg.evaluate("__fl.S.grocery.length") == 0 and pg.is_visible('#undoBtn'))
+    shot(pg, '27-grocery-remove-all', keep=True)
+    pg.click('#undoBtn'); pg.wait_for_timeout(200); ok('Undo restores whole list', pg.evaluate("__fl.S.grocery.length") == 2)
+    pg.once('dialog', lambda d: d.accept()); pg.click('#clearAll'); pg.wait_for_timeout(200)
+    # planned meal -> approve -> To cook + grocery; remove -> gone, checked kept
+    r = pg.evaluate('''(async()=>{const fl=__fl;fl.S.toCook=[];const d=fl.weekPlanDays().find(x=>x.date>=new Date().toISOString().slice(0,10))||fl.weekPlanDays().slice(-1)[0];for(const x of fl.weekPlanDays())x.meals={};
+      const m=fl.library().find(m=>m.slot==='dinner'&&(m.ingredients||[]).length>=3);d.meals.dinner=m.id;await fl.save('plan');await fl.approveWeek(true);
+      const t=fl.S.toCook.find(x=>x.mealId===m.id);if(!t)return 'no tocook';const g=fl.S.grocery.filter(g=>g.from==='week'||g.servings);if(!g.length)return 'no grocery '+JSON.stringify(fl.S.grocery);g[0].done=true;g[0].doneAt=Date.now();await fl.save('grocery');
+      return {date:d.date,id:m.id,checked:g[0].name,n:fl.S.grocery.length}})()''')
+    print('PLANRM', r)
+    pg.click('.tabs [data-tab=plan]'); pg.wait_for_selector('#s-plan:not([hidden])'); pg.evaluate(f"document.querySelector('#planDays [data-date=\"{r['date']}\"]').open=true")
+    pg.click(f"#planDays [data-date='{r['date']}'] [data-rm=dinner]"); pg.wait_for_timeout(300)
+    ok('Remove takes meal off To cook', not pg.evaluate(f"__fl.S.toCook.some(x=>x.mealId==={json.dumps(r['id'])})"))
+    print('GROC', pg.evaluate("JSON.stringify(__fl.S.grocery.map(g=>[g.name,g.from,g.done,g.servings]))"))
+    ok('Remove drops its grocery servings but keeps checked items', pg.evaluate(f"__fl.S.grocery.some(g=>g.name==={json.dumps(r['checked'])})") and pg.evaluate("__fl.S.grocery.filter(g=>!g.done&&(g.from==='week')).length") == 0)
+    pg.click('#undoBtn'); pg.wait_for_timeout(300); ok('Undo brings meal back to To cook', pg.evaluate(f"__fl.S.toCook.some(x=>x.mealId==={json.dumps(r['id'])})"))
+    pg.once('dialog', lambda d: d.accept()); pg.click('#clearWeek'); pg.wait_for_timeout(300)
+    ok('Clear this week empties plan + To cook', pg.evaluate("__fl.weekPlanDays().every(d=>!Object.values(d.meals).some(Boolean)) && !__fl.S.toCook.some(x=>x.source==='week'||x.plannedDay)"))
+    # one-time choice for old stored auto plan
+    pg.evaluate("__fl.S.settings.planStyle='pending';__fl.weekPlanDays()[0].meals.lunch=__fl.library().find(m=>m.slot==='lunch').id;__fl.save('plan','settings');__fl.renderPlan()")
+    ok('old auto plan shows Start fresh / Keep choice', pg.is_visible('#planChoice'))
+    pg.click('#planChoice [data-choice=keep]'); pg.wait_for_timeout(200)
+    ok('Keep suggestions keeps meals, hides choice', pg.evaluate("__fl.S.settings.planStyle")=='choose' and not pg.is_visible('#planChoice') and pg.evaluate("!!__fl.weekPlanDays()[0].meals.lunch"))
+    pg.evaluate("(async()=>{const k=JSON.parse(window._keep);__fl.S.grocery=k.g;__fl.S.toCook=k.t;__fl.S.plan=k.p;__fl.S.settings.planStyle=k.s;await __fl.save('grocery','toCook','plan','settings')})()")
+    pg.click('.tabs [data-tab=grocery]'); pg.wait_for_selector('#s-grocery:not([hidden])')
     ctx.set_offline(True); pg.wait_for_timeout(300); ok('offline: cart link explains it needs a connection', 'needs a connection' in pg.inner_text('#walmartBox')); ctx.set_offline(False); pg.wait_for_timeout(300)
     pg.click('#storeBtn'); pg.fill('#storeInput', '3017620422003'); pg.click('#storeForm button'); pg.wait_for_selector('.verdict', timeout=30000)
     ok('store mode checked off matching item', pg.evaluate("__fl.S.grocery.find(g=>g.text==='hazelnut spread').done"))
@@ -259,12 +308,13 @@ try:
     # ---- weekly approval -> To cook ----
     MAC = 'dinner-wholewheat-mac-cheese-broccoli'
     pg.evaluate("__fl.S.toCook=[];__fl.S.grocery=[];__fl.save('toCook','grocery')")
-    pg.evaluate(f"(()=>{{const wk=__fl.weekKey(new Date());const end=new Date(wk);const ds=__fl.planDaysAhead().filter(d=>d.date<__fl.weekKey(new Date(Date.now()+7*864e5)));window._wd=ds.map(d=>d.date);ds[0].meals.dinner='{MAC}';if(ds[2])ds[2].meals.dinner='{MAC}';__fl.save('plan')}})()")
+    pg.evaluate(f"(()=>{{const wk=__fl.weekKey(new Date());const end=new Date(wk);const ds=__fl.planDaysAhead().filter(d=>d.date<__fl.weekKey(new Date(Date.now()+7*864e5)));window._wd=ds.map(d=>d.date);ds.forEach(d=>{{if(d.meals.dinner==='{MAC}')d.meals.dinner=__fl.library().find(m=>m.slot==='dinner'&&m.id!=='{MAC}').id}});ds[0].meals.dinner='{MAC}';if(ds[2])ds[2].meals.dinner='{MAC}';__fl.save('plan')}})()")
     wd = pg.evaluate('window._wd'); print('WEEKDAYS', wd)
     pg.click('.tabs [data-tab=plan]'); pg.wait_for_timeout(300); pg.evaluate("document.getElementById('approveWeekPlan').scrollIntoView({block:'center'})"); shot(pg, '22-week-approve')
     pg.click('#approveWeekPlan'); pg.wait_for_timeout(400)
     nmeals = pg.evaluate("__fl.planDaysAhead().filter(d=>window._wd.includes(d.date)).reduce((a,d)=>a+Object.values(d.meals).filter(Boolean).length,0)")
     ok('approve: every week meal saved with day/slot/steps', pg.evaluate('__fl.S.toCook.length') == nmeals and pg.evaluate("__fl.S.toCook.every(t=>t.plannedDay&&t.slot&&t.source==='week'&&Array.isArray(t.steps))"))
+    print('DBG', pg.evaluate("JSON.stringify([__fl.S.plan.style,__fl.S.plan.mode,__fl.planDaysAhead().map(d=>d.date+':'+d.meals.dinner),__fl.S.toCook.map(t=>t.mealId+'@'+t.plannedDay)])"))
     if len(wd) >= 3:
       ok('same meal twice stays as 2 separate copies', pg.evaluate(f"__fl.S.toCook.filter(t=>t.mealId==='{MAC}').length") == 2)
       ch = pg.evaluate("__fl.S.grocery.find(g=>g.name==='Cheddar cheese')"); ok('grocery holds both servings (×2, summed)', ch and ch['servings'] == 2 and '68 g' in ch['text'] and '×2' in ch['text'])

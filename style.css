@@ -264,3 +264,10 @@ details.cite[open]{display:block;width:100%;background:#f6f8f4;border-radius:8px
 .cost{font-size:12px;color:#6b7280;border:1px solid #d1d5db;border-radius:6px;padding:0 5px;margin-left:4px;font-weight:600}
 .buy{display:block;font-size:14px;color:#374151}.avail.note{color:#6b7280;font-weight:400}.find-wm.alt{display:block;margin-top:0;font-size:14px}
 .times .row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}.times input{min-height:48px;font-size:16px}
+.plan-slot{display:grid;gap:6px;padding:10px 0;border-top:1px solid #eee}.plan-slot .k{text-transform:capitalize;font-weight:700;color:#365314}
+.plan-slot .btn.big{min-height:52px;font-size:17px;width:100%}.slot-btns{display:grid;grid-template-columns:1fr 1fr;gap:8px}.btn.rm{color:#b91c1c}
+.warn{color:#b45309;font-size:14px;display:block}.plan-choice{display:grid;gap:8px}#clearWeek{width:100%;margin:10px 0}
+#mealPicker{width:min(96vw,560px);max-height:92vh;border:0;border-radius:18px;padding:14px}.pick-head{display:flex;justify-content:space-between;align-items:center;gap:8px}.pick-head h2{font-size:19px;margin:0;text-transform:capitalize}
+#pickSearch{width:100%;min-height:50px;font-size:17px;margin:8px 0}#pickFilters button.on{background:#3f7d4e;color:#fff}#pickFilters select{min-height:44px}
+.pick-list{list-style:none;padding:0;margin:8px 0 0}.pick-row{display:block;width:100%;text-align:left;min-height:60px;padding:10px 12px;margin-bottom:8px;border:1px solid #d6e4d8;border-radius:14px;background:#fff;font-size:16px}.pick-row .nm{display:block;font-weight:600}.pick-row .sub{display:block}.pick-h{margin:12px 0 6px;font-weight:700}
+.undo-btn{margin-left:10px;padding:8px 14px;border-radius:10px;border:0;background:#fff;color:#1f2937;font-weight:700;min-height:40px}

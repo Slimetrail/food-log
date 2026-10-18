@@ -13,6 +13,10 @@ const fromKey = k => { const [y, m, d] = k.split('-').map(Number); return new Da
 const fmtTime = d => new Date(d).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 const fmtDay = d => new Date(d).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
 const toLocalInput = d => { d = new Date(d); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16); };
+function snapshot() { return JSON.stringify({ plan: S.plan, toCook: S.toCook, grocery: S.grocery }); }
+let undoSnap = null;
+function toastUndo(msg, snap, ms = 8000) { undoSnap = snap; const t = $('#toast'); t.innerHTML = `<span>${esc(msg)}</span> <button type="button" class="undo-btn" id="undoBtn">Undo</button>`; t.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => { t.hidden = true; undoSnap = null; }, ms); }
+document.addEventListener('click', async e => { if (e.target.id !== 'undoBtn' || !undoSnap) return; const o = JSON.parse(undoSnap); undoSnap = null; S.plan = o.plan; S.toCook = o.toCook; S.grocery = o.grocery; await save('plan', 'toCook', 'grocery'); $('#toast').hidden = true; show(curTab); toast('Undone'); });
 function toast(msg, ms = 2600) { const t = $('#toast'); t.textContent = msg; t.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => t.hidden = true, ms); }
 const NUTS = ['kcal', 'protein', 'carbs', 'fiber', 'sugar', 'fat', 'satfat', 'sodium'];
 const NUT_EXPORT = { kcal: 'kcal', protein: 'protein_g', carbs: 'carbs_g', fiber: 'fiber_g', sugar: 'sugar_g', fat: 'fat_g', satfat: 'satfat_g', sodium: 'sodium_mg' };
@@ -141,10 +145,10 @@ const walmartFindUrl = g => { const id = groceryWalmartId(g); return id ? 'https
 function renderWalmart() {
   const box = $('#walmartBox'); if (!box) return; box.hidden = !isWalmart(); if (!isWalmart()) return;
   const c = walmartCartUrl(), unchecked = S.grocery.filter(g => !g.done).length;
-  if (!c) { box.innerHTML = `<div class="sub">🛒 ${unchecked ? 'Research is matching your items to Walmart products. The cart button appears once items have a Walmart product match.' : 'Add items to your list to send them to your Walmart cart.'}</div>`; return; }
+  if (!c) { box.innerHTML = `<div class="sub">To empty your Walmart cart, open it in the Walmart app.</div><div class="sub">🛒 ${unchecked ? 'Research is matching your items to Walmart products. The cart button appears once items have a Walmart product match.' : 'Add items to your list to send them to your Walmart cart.'}</div>`; return; }
   const off = !navigator.onLine;
   box.innerHTML = `<a class="btn primary big walmart-cart${off ? ' disabled' : ''}" id="walmartCart" href="${off ? '#' : esc(c.url)}" target="_blank" rel="noopener"${off ? ' aria-disabled="true"' : ''}>🛒 Add to my Walmart cart (${c.n} item${c.n === 1 ? '' : 's'})</a>
-    <div class="sub">${off ? '📴 You\u2019re offline. The Walmart cart link needs a connection.' : `Opens Walmart and adds 1 of each matched item to your cart. Review quantities and check out in Walmart yourself.${c.n < unchecked ? ` ${unchecked - c.n} item${unchecked - c.n === 1 ? '' : 's'} not matched yet; use 🔎 Find at Walmart.` : ''}`}</div>`;
+    <div class="sub">${off ? '📴 You\u2019re offline. The Walmart cart link needs a connection.' : `Opens Walmart and adds 1 of each matched item to your cart. Review quantities and check out in Walmart yourself. To empty your Walmart cart, open it in the Walmart app.${c.n < unchecked ? ` ${unchecked - c.n} item${unchecked - c.n === 1 ? '' : 's'} not matched yet; use 🔎 Find at Walmart.` : ''}`}</div>`;
 }
 window.addEventListener('online', () => renderWalmart()); window.addEventListener('offline', () => renderWalmart());
 document.addEventListener('click', e => { const w = e.target.closest('#walmartCart.disabled'); if (w) { e.preventDefault(); toast('The Walmart cart link needs a connection. Try again when you\u2019re online.'); } });
@@ -264,7 +268,7 @@ function listIngredients(t) {
   }
   t.listed = true; return n;
 }
-function unlistIngredients(t) { if (!t.listed) return; for (const i of t.ingredients) { if (isPantry(i)) continue; const g = groceryFor(i.name).find(x => !x.done && x.from === 'week'); if (!g) continue; g.servings = (g.servings || 1) - 1; if (g.servings <= 0) S.grocery = S.grocery.filter(x => x !== g); else g.text = gText(g); } t.listed = false; }
+function unlistIngredients(t) { if (!t.listed) return; for (const i of t.ingredients) { if (isPantry(i)) { if (!S.toCook.some(o => o !== t && o.listed && o.ingredients.some(j => j.name === i.name))) S.grocery = S.grocery.filter(x => !(x.pantry && !x.done && x.from === 'week' && x.name === i.name)); continue; } const g = groceryFor(i.name).find(x => !x.done && x.from === 'week'); if (!g) continue; g.servings = (g.servings || 1) - 1; if (g.servings <= 0) S.grocery = S.grocery.filter(x => x !== g); else g.text = gText(g); } t.listed = false; }
 // making a meal uses one serving of each non-pantry ingredient
 function useIngredients(t) {
   const usedNames = [];
@@ -1021,14 +1025,17 @@ function researchWeekPlan() {
 function ensurePlan(force) {
   const lib = library(); if (!lib.length) { S.plan = null; return; }
   const sig = libSig(), mode = S.settings.planMode, today = startOfDay(new Date()), tk = dayKey(today);
-  if (!force && (!S.plan || S.plan.mode !== 'research')) { const rp = researchWeekPlan(); if (rp && (!S.plan || S.plan.sig !== rp.sig)) { S.plan = rp; save('plan'); return; } }
+  const old = S.plan, choose = planChoose();
+  if (!choose && !force && (!S.plan || S.plan.mode !== 'research')) { const rp = researchWeekPlan(); if (rp && (!S.plan || S.plan.sig !== rp.sig)) { S.plan = rp; save('plan'); return; } }
   let p = S.plan;
   const lastPast = p ? p.days.filter(d => d.date < tk).slice(-1)[0] : null;
   if (force || !p || (p.mode !== 'research' && (p.sig !== sig || p.mode !== mode)) || (p.mode === 'research' && p.sig !== sig && !researchWeekPlan())) p = { start: tk, mode, sig, days: newDays(today, 7, lastPast) };
   else if (p.mode === 'weekly' && tk >= dayKey(addDays(fromKey(p.start), 7))) p = { start: tk, mode, sig, days: newDays(today, 7, lastPast) };
   else if (p.mode === 'daily' && p.start !== tk) { const days = p.days.filter(d => d.date >= tk); while (days.length < 7) { const prev = days[days.length - 1] || lastPast; days.push(...newDays(prev ? addDays(fromKey(prev.date), 1) : today, 1, prev)); } p = { ...p, start: tk, days }; }
+  if (choose && p !== old) { const keep = old && old.style === 'choose'; for (const d of p.days) { const od = old && old.days.find(x => x.date === d.date); d.meals = keep && od ? { ...od.meals } : (p.days === (old && old.days) ? d.meals : {}); } p.style = 'choose'; }
   S.plan = p; save('plan');
 }
+const planChoose = () => S.settings.planStyle === 'choose';
 function planDaysAhead() { const tk = dayKey(new Date()); return (S.plan ? S.plan.days : []).filter(d => d.date >= tk); }
 function renderPlan() {
   ensurePlan();
@@ -1041,21 +1048,58 @@ function renderPlan() {
   $('#library').innerHTML = lib.map(m => `<li><div class="info"><b>${esc(m.name)}</b>${costTag(m)} <span class="tag">${esc(slotOf(m))}</span>${m.origin === 'mine' ? '<span class="tag">mine</span>' : ''}<div class="sub">${(m.ingredients || []).map(i => esc(i.name)).join(', ')}${m.kcalApprox != null ? ' · ~' + esc(m.kcalApprox) + ' kcal' : ''}</div>${m.origin === 'research' ? `<div class="src">${evBadge(m)} ${srcLinks(m.sources)}</div>` : ''}</div>${m.origin === 'mine' ? `<button class="icon-btn" data-del="${m.id}" aria-label="Delete">🗑️</button>` : ''}</li>`).join('') + (hidden > 0 ? `<li class="sub">🚫 ${hidden} meal${hidden === 1 ? '' : 's'} hidden because of your allergies / foods to avoid.</li>` : '');
   $('#planNote').innerHTML = !lib.length ? 'No meals yet. Add your own below or wait for research meals.' : (S.plan.mode === 'research' ? "This week's plan comes from your research update. " : (S.settings.planMode === 'weekly' ? 'New plan each week. ' : 'Rolls forward daily. ') ) + 'Tap a day to pick from the options. Rules: no meal on back-to-back days, no main food twice in a day.';
   const days = planDaysAhead();
-  $('#planDays').innerHTML = days.map(d => { const i = all.indexOf(d), prev = all[i - 1], next = all[i + 1];
-    return `<details class="day${d.date === tk ? ' today' : ''}"${d.date === tk ? ' open' : ''} data-date="${d.date}"><summary><h3>${d.date === tk ? 'Today · ' : ''}${fmtDay(fromKey(d.date))}</h3>${SLOTS.filter(s => d.meals[s]).map(s => `<div class="slot"><span class="k">${s}</span><span>${esc((mealById(d.meals[s]) || {}).name || '?')}</span></div>`).join('') || '<div class="sub">Nothing picked yet</div>'}</summary>
-    ${SLOTS.filter(s => (d.options[s] || []).length).map(s => `<div class="opt-slot"><div class="k">${s}: choose one</div><div class="chips">${d.options[s].map(id => { const m = mealById(id); if (!m) return ''; const c = d.meals[s] === id ? null : conflict(m, d, s, prev, next); return `<button type="button" class="${d.meals[s] === id ? 'on' : ''}${c ? ' dim' : ''}" data-slot="${s}" data-id="${id}"${c ? ` title="${esc(c)}"` : ''}>${esc(m.name)}${c ? ` <small>(${esc(c)})</small>` : ''}</button>`; }).join('')}</div></div>`).join('')}</details>`; }).join('');
+  $('#planChoice').hidden = S.settings.planStyle !== 'pending';
+  $('#planDays').innerHTML = days.map(d => `<details class="day${d.date === tk ? ' today' : ''}"${d.date === tk ? ' open' : ''} data-date="${d.date}"><summary><h3>${d.date === tk ? 'Today · ' : ''}${fmtDay(fromKey(d.date))}</h3><div class="sub">${SLOTS.filter(s => d.meals[s] && mealById(d.meals[s])).map(s => esc(mealById(d.meals[s]).name)).join(' · ') || 'Nothing chosen yet. Tap to choose.'}</div></summary>
+    ${SLOTS.map(s => { const m = d.meals[s] && mealById(d.meals[s]); const w = m ? sameDayWarn(m, d, s) : '';
+      return `<div class="plan-slot"><div class="k">${s}</div>${m ? `<div class="chosen"><b>${esc(m.name)}</b>${costTag(m)}${w ? `<div class="warn">⚠️ ${esc(w)}</div>` : ''}</div><div class="slot-btns"><button type="button" class="btn big" data-pick="${s}">Change</button><button type="button" class="btn big rm" data-rm="${s}">✕ Remove</button></div>` : `<button type="button" class="btn big choose" data-pick="${s}">➕ Choose a meal</button>`}</div>`; }).join('')}</details>`).join('');
   renderPrep(); const ab = $('#approveWeekPlan'); if (ab) ab.textContent = weekApproved() ? '✅ This week\'s meals are in To cook (tap to refresh)' : '✅ Use these meals this week';
 }
+function sameDayWarn(m, d, slot) { const mf = mainFoods(m); for (const [s2, id] of Object.entries(d.meals)) { if (s2 === slot || !id) continue; const o = mealById(id); if (!o) continue; if (o.id === m.id) return 'also planned for ' + s2 + ' today'; for (const k of mainFoods(o)) if (mf.has(k)) return 'same main food as ' + s2 + ' today'; } return ''; }
+async function removePlanned(date, slot) {
+  const d = S.plan && S.plan.days.find(x => x.date === date); if (!d || !d.meals[slot]) return;
+  const id = d.meals[slot]; delete d.meals[slot];
+  for (const t of S.toCook.filter(t => t.mealId === id && t.plannedDay === date && t.slot === slot)) { unlistIngredients(t); S.toCook = S.toCook.filter(x => x !== t); }
+}
 $('#planDays').onclick = async e => {
-  const b = e.target.closest('button[data-slot]'); if (!b) return; const det = b.closest('[data-date]'); const all = S.plan.days, i = all.findIndex(d => d.date === det.dataset.date), d = all[i];
-  const m = mealById(b.dataset.id), c = conflict(m, d, b.dataset.slot, all[i - 1], all[i + 1]);
-  if (d.meals[b.dataset.slot] === m.id) { delete d.meals[b.dataset.slot]; S.toCook = S.toCook.filter(t => !(t.mealId === m.id && t.plannedDay === d.date && t.slot === b.dataset.slot)); await save('toCook'); }
-  else { if (c) return toast("Can't pick that: " + c); const old = d.meals[b.dataset.slot]; if (old) { S.toCook = S.toCook.filter(t => !(t.mealId === old && t.plannedDay === d.date && t.slot === b.dataset.slot)); await save('toCook'); } d.meals[b.dataset.slot] = m.id;
-    if (weekApproved()) {} else if (b.dataset.slot === 'dinner' && ((m.ingredients || []).length || (m.steps || []).length)) await addSwapToGrocery({ mealId: m.id, name: m.name }, null, { day: d.date, slot: 'dinner' }); }
-  await save('plan'); if (weekApproved()) await approveWeek(true); renderPlan(); const again = $(`#planDays [data-date="${d.date}"]`); if (again) again.open = true;
+  const det = e.target.closest('[data-date]'); if (!det) return; const date = det.dataset.date;
+  const rm = e.target.closest('[data-rm]'); if (rm) { const snap = snapshot(); const nm = (mealById(S.plan.days.find(x => x.date === date).meals[rm.dataset.rm]) || {}).name || 'Meal'; await removePlanned(date, rm.dataset.rm); await save('plan', 'toCook', 'grocery'); renderPlan(); const again = $(`#planDays [data-date="${date}"]`); if (again) again.open = true; toastUndo(`Removed ${nm}`, snap); return; }
+  const pk = e.target.closest('[data-pick]'); if (pk) openPicker(date, pk.dataset.pick);
 };
+$('#clearWeek').onclick = async () => { const days = weekPlanDays(); const n = days.reduce((a, d) => a + Object.keys(d.meals).length, 0); if (!n) return toast('Nothing planned this week'); if (!confirm(`Remove all ${n} planned meals this week?`)) return; const snap = snapshot(); for (const d of days) for (const s of Object.keys(d.meals)) await removePlanned(d.date, s); await save('plan', 'toCook', 'grocery'); renderPlan(); toastUndo(`Cleared ${n} meals this week`, snap); };
+$('#planChoice').onclick = async e => { const b = e.target.closest('[data-choice]'); if (!b) return; if (b.dataset.choice === 'fresh') { const tk = dayKey(new Date()); for (const d of (S.plan ? S.plan.days : [])) if (d.date >= tk) d.meals = {}; } if (S.plan) S.plan.style = 'choose'; S.settings.planStyle = 'choose'; await save('plan', 'settings'); renderPlan(); toast(b.dataset.choice === 'fresh' ? 'Plan cleared. Choose your meals.' : 'Kept the suggestions. Change any meal.'); };
+/* ---------- meal picker ---------- */
+let pickCtx = null;
+const mealAtStore = m => { if (!myStore()) return false; const ings = (m.ingredients || []).filter(i => !isPantry(i)); return ings.length > 0 && ings.every(i => { const a = storeAvail(storeFields(i)); return a && a.inStock; }); };
+function favMeals(slot) { return S.favorites.map(f => ({ id: 'fav:' + favKey(f), name: f.name, slot, ingredients: [], origin: 'favorite', fav: f })); }
+function openPicker(date, slot) { pickCtx = { date, slot, q: '', f: {} }; $('#pickTitle').textContent = `Choose ${slot} · ${fmtDay(fromKey(date)).split(',')[0]}`; $('#pickSearch').value = ''; $$('#pickFilters [data-f]').forEach(b => b.classList.remove('on')); $('#pickTag').innerHTML = '<option value="">Any tag</option>' + [...new Set(library().flatMap(m => m.tags || []))].sort().map(t => `<option>${esc(t)}</option>`).join(''); $('#pickFilters [data-f=store]').hidden = !myStore(); renderPicker(); $('#mealPicker').showModal(); document.activeElement && document.activeElement.blur(); }
+function renderPicker() {
+  const { date, slot } = pickCtx, d = S.plan.days.find(x => x.date === date), q = $('#pickSearch').value.trim().toLowerCase(), on = f => $(`#pickFilters [data-f=${f}]`).classList.contains('on'), tag = $('#pickTag').value;
+  let ms = library().filter(m => slotOf(m) === slot);
+  if (q) ms = ms.filter(m => (m.name + ' ' + (m.ingredients || []).map(i => i.name).join(' ')).toLowerCase().includes(q));
+  if (on('quick')) ms = ms.filter(m => (m.tags || []).includes('quick'));
+  if (on('budget')) ms = ms.filter(m => m.costTier === '$');
+  if (on('store')) ms = ms.filter(mealAtStore);
+  if (tag) ms = ms.filter(m => (m.tags || []).includes(tag));
+  const favs = q || on('quick') || on('budget') || on('store') || tag ? [] : favMeals(slot);
+  const row = m => { const w = sameDayWarn(m, d, slot); return `<li><button type="button" class="pick-row" data-pid="${esc(m.id)}"><span class="nm">${esc(m.name)}${costTag(m)}${m.origin === 'mine' ? ' <span class="tag">mine</span>' : ''}${m.origin === 'favorite' ? ' <span class="tag">⭐ favorite</span>' : ''}</span><span class="sub">${m.nutritionApprox && m.nutritionApprox.kcal != null ? '~' + esc(m.nutritionApprox.kcal) + ' kcal · ' : ''}${esc((m.tags || []).slice(0, 3).join(', '))}</span>${w ? `<span class="warn">⚠️ ${esc(w)} (you can still pick it)</span>` : ''}</button></li>`; };
+  $('#pickList').innerHTML = (ms.length ? ms.map(row).join('') : '<li class="sub">No meals match. Try fewer filters.</li>') + (favs.length ? `<li class="pick-h">⭐ Your favorites</li>` + favs.map(row).join('') : '');
+  const hidden = R.meals.filter(m => hasSrc(m) && slotOf(m) === slot && mealBlocked(m)).length; $('#pickNote').textContent = hidden ? `🚫 ${hidden} hidden for your allergies / foods to avoid` : '';
+}
+async function pickMeal(pid) {
+  const { date, slot } = pickCtx; const d = S.plan.days.find(x => x.date === date);
+  let id = pid;
+  if (pid.startsWith('fav:')) { const f = favMeals(slot).find(x => x.id === pid); let mm = S.myMeals.find(x => x.favKey === pid); if (!mm) { mm = { id: 'my-' + uid(), name: f.name, slot, ingredients: [], favKey: pid, origin: 'mine' }; S.myMeals.push(mm); await save('myMeals'); } id = mm.id; }
+  if (d.meals[slot] && d.meals[slot] !== id) await removePlanned(date, slot);
+  d.meals[slot] = id; S.plan.style = 'choose'; await save('plan', 'toCook', 'grocery');
+  if (weekApproved()) await approveWeek(true);
+  $('#mealPicker').close(); renderPlan(); const again = $(`#planDays [data-date="${date}"]`); if (again) again.open = true;
+}
+$('#pickSearch').oninput = () => renderPicker(); $('#pickTag').onchange = () => renderPicker();
+$('#pickFilters').onclick = e => { const b = e.target.closest('[data-f]'); if (!b) return; b.classList.toggle('on'); renderPicker(); };
+$('#pickList').onclick = e => { const b = e.target.closest('[data-pid]'); if (b) pickMeal(b.dataset.pid); };
+$('#pickClose').onclick = () => $('#mealPicker').close();
 $('#planMode').onchange = async () => { S.settings.planMode = $('#planMode').value; await save('settings'); ensurePlan(true); renderPlan(); };
-$('#regenPlan').onclick = async () => { if (!S.plan) return toast('Add some meals first'); const all = S.plan.days, tk = dayKey(new Date()); all.forEach((d, i) => { if (d.date < tk) return; makeOptions(d, all[i - 1]); autoFillDay(d, all[i - 1], null); }); await save('plan'); renderPlan(); toast('Week filled ✨'); };
+$('#regenPlan').onclick = async () => { ensurePlan(); if (!S.plan) return toast('Add some meals first'); const snap = snapshot(); const all = S.plan.days, tk = dayKey(new Date()); all.forEach((d, i) => { if (d.date < tk) return; makeOptions(d, all[i - 1]); autoFillDay(d, all[i - 1], null); }); S.plan.style = planChoose() ? 'choose' : S.plan.style; await save('plan'); if (weekApproved()) await approveWeek(true); renderPlan(); toastUndo('Week auto-filled ✨ (suggestions; change any meal)', snap); };
 $('#library').onclick = async e => { const id = e.target.closest('[data-del]')?.dataset.del; if (!id) return; const m = S.myMeals.find(x => x.id === id); if (!m || !confirm('Delete "' + m.name + '"?')) return; S.myMeals = S.myMeals.filter(x => x.id !== id); await save('myMeals'); renderPlan(); };
 $('#addMealBtn').onclick = () => { $('#mealForm').hidden = false; $('#mealForm').reset(); $('#mfName').focus(); };
 $('#mfCancel').onclick = () => $('#mealForm').hidden = true;
@@ -1109,8 +1153,8 @@ $('#loadResList').onclick = async () => {
   }
   await save('grocery'); renderGrocery(); toast(`${added} items added${swapped ? ` (${swapped} swapped for your allergies)` : ''}`);
 };
-$('#clearChecked').onclick = async () => { S.grocery = S.grocery.filter(g => !g.done); await save('grocery'); renderGrocery(); };
-$('#clearAll').onclick = async () => { if (!S.grocery.length || !confirm('Clear the whole list?')) return; S.grocery = []; await save('grocery'); renderGrocery(); };
+$('#clearChecked').onclick = async () => { const n = S.grocery.filter(g => g.done).length; if (!n) return toast('Nothing checked yet'); const snap = snapshot(); S.grocery = S.grocery.filter(g => !g.done); await save('grocery'); renderGrocery(); toastUndo(`Cleared ${n} checked item${n === 1 ? '' : 's'}`, snap); };
+$('#clearAll').onclick = async () => { if (!S.grocery.length) return toast('Your list is already empty'); if (!confirm(`Remove all ${S.grocery.length} items from your grocery list?`)) return; const snap = snapshot(); S.grocery = []; await save('grocery'); renderGrocery(); toastUndo('Grocery list cleared', snap); };
 
 /* ---------- store mode ---------- */
 const storeScanner = new Scanner($('#storeVideo'), $('#storeMsg'), code => { storeCheck(code).finally(() => setTimeout(() => { if (!$('#storePanel').hidden) storeScanner.start(); }, 2500)); });
@@ -1159,11 +1203,11 @@ $('#installBtn').onclick = async () => { if (deferredPrompt) { deferredPrompt.pr
 
 /* ---------- init ---------- */
 (async () => {
-  await DB.open(); await loadState(); await loadResearch();
+  await DB.open(); await loadState(); if (S.settings.planStyle == null) { S.settings.planStyle = S.plan && (S.plan.days || []).some(d => Object.keys(d.meals || {}).length) ? 'pending' : 'choose'; save('settings'); } await loadResearch();
   if (!S.profile) { fillProfile(); show('profile'); } else show('today');
   resolvePending();
   document.addEventListener('visibilitychange', async () => { if (document.visibilityState === 'visible' && navigator.onLine) { await loadResearch(); if (curTab !== 'add' && curTab !== 'profile' && curTab !== 'quiz') show(curTab); } });
-  window.__fl = { mainFoods, mealById, library, S, R, save, show, weeklyExport, offLookup, parseLabel, lookupAndOpen, storeCheck, ensurePlan, addSwapToGrocery, migrateMealIds, mealHour, gInfo, walmartPick, satisfied, checkHolds, addMealThisWeek, approveWeek, weekKey, boughtState, markCooked, walmartCartUrl, renderGrocery, storeKey, availHTML, exportProfile, markScannedForToCook, planDaysAhead, saveToCook, renderToCook, tonightItem, dinnerHour, resolveSwapQueue, swapsFor };
+  window.__fl = { mainFoods, mealById, library, S, R, save, show, weeklyExport, offLookup, parseLabel, lookupAndOpen, storeCheck, ensurePlan, addSwapToGrocery, renderPlan, renderPicker, mealBlocked, weekPlanDays, migrateMealIds, mealHour, gInfo, walmartPick, satisfied, checkHolds, addMealThisWeek, approveWeek, weekKey, boughtState, markCooked, walmartCartUrl, renderGrocery, storeKey, availHTML, exportProfile, markScannedForToCook, planDaysAhead, saveToCook, renderToCook, tonightItem, dinnerHour, resolveSwapQueue, swapsFor };
 })();
 
 /* ---------- resolve offline-queued barcodes when back online ---------- */

@@ -238,10 +238,12 @@
     <div class="row between"><b>Meal planner</b>
       <select id="planMode" aria-label="Refresh"><option value="weekly">New plan weekly</option><option value="daily">Roll daily</option></select></div>
     <div class="sub" id="planNote"></div>
-    <div class="row"><button class="btn primary" id="regenPlan">✨ Auto-fill week</button><button class="btn" id="planToGrocery">🛒 To grocery list</button></div>
+    <div class="row"><button class="btn" id="regenPlan">✨ Auto-fill (optional)</button><button class="btn" id="planToGrocery">🛒 To grocery list</button></div>
     <button class="btn primary big approve-week" data-approve="1" id="approveWeekPlan">✅ Use these meals this week</button>
   </div>
+  <div class="card plan-choice" id="planChoice" hidden><b>Your plan was filled in automatically</b><div class="sub">You can now choose every meal yourself.</div><button class="btn primary big" data-choice="fresh">Start fresh (empty week)</button><button class="btn big" data-choice="keep">Keep suggestions</button></div>
   <div id="planDays"></div>
+  <button class="btn big danger" id="clearWeek">Clear this week</button>
   <h2>Meal prep</h2>
   <div class="card" id="prepCard"></div>
   <h2>Meal library</h2>
@@ -272,7 +274,7 @@
   <ul class="grocery" id="groceryList"></ul>
   <div class="empty" id="groceryEmpty">Your list is empty. Add items above or send your meal plan here.</div>
   <div class="row" id="resListRow" hidden><button class="btn" id="loadResList">📋 Add research list</button><select id="resWeek" style="flex:none;width:120px"></select></div>
-  <div class="row"><button class="btn" id="clearChecked">Clear checked</button><button class="btn danger" id="clearAll">Clear all</button></div>
+  <div class="row"><button class="btn" id="clearChecked">Clear checked</button><button class="btn danger" id="clearAll">🗑️ Remove all</button></div>
 </section>
 </main>
 
@@ -285,6 +287,10 @@
   <button data-tab="grocery"><span>🛒</span>Grocery</button>
 </nav>
 
+<dialog id="mealPicker"><div class="pick-head"><h2 id="pickTitle">Choose a meal</h2><button class="btn" id="pickClose">Close</button></div>
+<input id="pickSearch" type="search" placeholder="Search meals or ingredients" autocomplete="off">
+<div class="chips" id="pickFilters"><button type="button" data-f="quick">⚡ Quick</button><button type="button" data-f="budget">$ Budget</button><button type="button" data-f="store">🏪 At my store</button><select id="pickTag" aria-label="Tag"></select></div>
+<div class="sub" id="pickNote"></div><ul id="pickList" class="pick-list"></ul></dialog>
 <dialog id="cookView"><div id="cookBody"></div></dialog>
 <dialog id="settings">
   <form method="dialog" class="dlg">
