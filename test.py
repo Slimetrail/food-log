@@ -49,7 +49,7 @@ try:
     ok('phase 1 chip on home', 'Phase 1' in pg.inner_text('#homeAlerts'))
     # wait for SW precache
     pg.evaluate("navigator.serviceWorker.ready"); pg.wait_for_function("caches.keys().then(k=>k.length>0)")
-    pg.wait_for_function("caches.open('foodlog-v17').then(c=>c.match('vendor/tessdata/eng.traineddata.gz')).then(r=>!!r)", timeout=60000)
+    pg.wait_for_function("caches.open('foodlog-v18').then(c=>c.match('vendor/tessdata/eng.traineddata.gz')).then(r=>!!r)", timeout=60000)
     ok('service worker precached OCR data', True)
     # --- real Open Food Facts lookups ---
     pg.click('#bigAdd'); pg.wait_for_selector('#s-add:not([hidden])')
@@ -411,7 +411,7 @@ try:
     pg.click('#hhView [data-v=merged]')
     ex = pg.evaluate("__fl.hhExport()")
     ok('share file holds only week/allergies/phase, no history', set(ex['member'].keys()) <= {'id', 'name', 'color', 'allergies', 'avoid', 'phase', 'pace', 'week', 'grocery', 'updatedAt'} and not any(k in json.dumps(ex) for k in ['"entries"', '"weights"', '"quizHistory"', '"answers"']))
-    bad = dict(hh['B'], householdId='hh-other'); pg.set_input_files('#hhFile', hfile(bad)); pg.wait_for_timeout(200)
+    bad = dict(hh['B'], householdId='hh-other'); pg.evaluate(f"__fl.hhImport({json.dumps(json.dumps(bad))})"); pg.wait_for_timeout(100)
     ok('different household id rejected', 'different household' in pg.evaluate("document.getElementById('toast').textContent") and pg.locator('.hh-row').count() == 2)
     pg.set_input_files('#hhFile', hfile({'type': 'foodlog-household-leave', 'v': 1, 'householdId': hh['hid'], 'memberId': 'm-testB'}, 'leave.foodlog-household.json')); pg.wait_for_timeout(300)
     ok('leave notice import removes member rows + items', pg.locator('.hh-row').count() == 1 and not any(len(o['who']) > 1 for o in pg.evaluate("__fl.hhMerged()")))
