@@ -46,7 +46,7 @@ try:
     ok('phase 1 chip on home', 'Phase 1' in pg.inner_text('#homeAlerts'))
     # wait for SW precache
     pg.evaluate("navigator.serviceWorker.ready"); pg.wait_for_function("caches.keys().then(k=>k.length>0)")
-    pg.wait_for_function("caches.open('foodlog-v15').then(c=>c.match('vendor/tessdata/eng.traineddata.gz')).then(r=>!!r)", timeout=60000)
+    pg.wait_for_function("caches.open('foodlog-v16').then(c=>c.match('vendor/tessdata/eng.traineddata.gz')).then(r=>!!r)", timeout=60000)
     ok('service worker precached OCR data', True)
     # --- real Open Food Facts lookups ---
     pg.click('#bigAdd'); pg.wait_for_selector('#s-add:not([hidden])')
@@ -376,6 +376,52 @@ try:
     pg.click('#pickClose')
     pg.evaluate("(()=>{const k=JSON.parse(window._kzip);__fl.S.profile.zip=k[0];__fl.S.profile.homeState=k[1];__fl.R.seasonal=window._ks})()")
     pg.click('.tabs [data-tab=grocery]'); pg.wait_for_selector('#s-grocery:not([hidden])')
+    # --- household (file share, two simulated members with different allergies) ---
+    pg.evaluate("window._khh=JSON.stringify(__fl.S.plan)")
+    pg.click('.tabs [data-tab=household]'); pg.wait_for_selector('#s-household:not([hidden])')
+    pg.fill('#hhName', 'TEST Alex'); pg.click('#hhCreate'); pg.wait_for_timeout(200)
+    ok('Create household: household + member ids', pg.evaluate("!!(__fl.S.household&&__fl.S.household.id&&__fl.S.household.me.id&&__fl.S.household.me.name==='TEST Alex')"))
+    hh = pg.evaluate('''(()=>{const fl=__fl,lib=fl.library(),wd=fl.weekPlanDays();wd.forEach(d=>d.meals={});
+      const Y=lib.find(m=>m.slot==='dinner'&&m.ingredients.some(i=>i.walmartItemId&&i.amount&&!fl.mealBlocked(m))&&!m.allergens.includes('peanuts'));const X=lib.find(m=>m.slot==='dinner'&&m.id!==Y.id);
+      const PB=fl.R.meals.find(m=>m.allergens.includes('peanuts')&&!fl.mealBlocked(m));
+      wd[0].meals.dinner=X.id;wd[1].meals.dinner=Y.id;fl.save('plan');
+      const week=[{date:wd[0].date,slot:'breakfast',mealId:PB.id,name:PB.name},{date:wd[1].date,slot:'dinner',mealId:Y.id,name:Y.name}];
+      const yi=Y.ingredients.find(i=>i.walmartItemId&&i.amount&&!fl.isPantry?.(i))||Y.ingredients.find(i=>i.walmartItemId&&i.amount);
+      return {hid:fl.S.household.id,X:X.id,Y:Y.id,PB:PB.id,yi:{name:yi.name,amount:yi.amount,unit:yi.unit},B:{type:'foodlog-household',v:1,householdId:fl.S.household.id,member:{id:'m-testB',name:'TEST Bea',color:'#db2777',allergies:['peanuts'],avoid:[],phase:1,week,grocery:fl.hhNeeds(week)},exportedAt:new Date().toISOString()}}})()''')
+    import tempfile as _tf
+    def hfile(obj, name='b.foodlog-household.json'):
+      d = _tf.mkdtemp(); fp = f'{d}/{name}'; json.dump(obj, open(fp, 'w')); return fp
+    pg.evaluate("__fl.renderHousehold()"); pg.set_input_files('#hhFile', hfile(hh['B'])); pg.wait_for_timeout(300)
+    ok('Import a member week -> two color-coded rows', pg.locator('.hh-row').count() == 2 and 'TEST Bea' in pg.inner_text('#householdBody') and 'updated' in pg.inner_text('#householdBody'))
+    ok("meal flagged against THAT member's allergies only", pg.locator(f".hh-meal.warn[data-hh-mem='m-testB'][data-hh-meal='{hh['PB']}']").count() == 1 and pg.locator(f".hh-meal.warn[data-hh-mem='{pg.evaluate('__fl.S.household.me.id')}']").count() == 0)
+    shot(pg, '31-household-rows')
+    pg.click(f".hh-meal[data-hh-mem='m-testB'][data-hh-meal='{hh['PB']}']"); pg.wait_for_selector('#hhMeal[open]')
+    ok('tap meal: opens with member allergy warning + phase', "conflicts with TEST Bea's allergies" in pg.inner_text('#hhMeal') and 'Phase 1' in pg.inner_text('#hhMeal'))
+    pg.click('#hhMealClose')
+    m = pg.evaluate("__fl.hhMerged()"); yi = [o for o in m if o['name'] == hh['yi']['name']]
+    ok('merged list: de-duplicated, amounts summed, both name chips', len(yi) == 1 and len(yi[0]['who']) == 2 and abs(yi[0]['amount'] - round(hh['yi']['amount']) * 2) <= 1 and len(m) == len({o['key'] for o in m}))
+    ok('Walmart cart link from merged list', 'affil.walmart.com/cart/addToCart?items=' in (pg.get_attribute('#hhCart', 'href') or ''))
+    pg.evaluate("document.querySelector('.hh-list').scrollIntoView({block:'start'});scrollBy(0,-120)"); shot(pg, '31b-household-merged-list')
+    pg.click('#hhView [data-v=person]'); pg.wait_for_timeout(200)
+    ok('Per person toggle', pg.locator('#householdBody h3 .hh-chip').count() == 2)
+    pg.evaluate("document.querySelector('#householdBody h3').scrollIntoView({block:'start'});scrollBy(0,-120)"); shot(pg, '31c-household-per-person')
+    pg.click('#hhView [data-v=merged]')
+    ex = pg.evaluate("__fl.hhExport()")
+    ok('share file holds only week/allergies/phase, no history', set(ex['member'].keys()) <= {'id', 'name', 'color', 'allergies', 'avoid', 'phase', 'pace', 'week', 'grocery', 'updatedAt'} and not any(k in json.dumps(ex) for k in ['"entries"', '"weights"', '"quizHistory"', '"answers"']))
+    bad = dict(hh['B'], householdId='hh-other'); pg.set_input_files('#hhFile', hfile(bad)); pg.wait_for_timeout(200)
+    ok('different household id rejected', 'different household' in pg.evaluate("document.getElementById('toast').textContent") and pg.locator('.hh-row').count() == 2)
+    pg.set_input_files('#hhFile', hfile({'type': 'foodlog-household-leave', 'v': 1, 'householdId': hh['hid'], 'memberId': 'm-testB'}, 'leave.foodlog-household.json')); pg.wait_for_timeout(300)
+    ok('leave notice import removes member rows + items', pg.locator('.hh-row').count() == 1 and not any(len(o['who']) > 1 for o in pg.evaluate("__fl.hhMerged()")))
+    pg.set_input_files('#hhFile', hfile(hh['B'])); pg.wait_for_timeout(200)
+    pg.once('dialog', lambda d: d.accept()); pg.click("[data-rm-mem='m-testB']"); pg.wait_for_timeout(200)
+    ok('Remove member', pg.locator('.hh-row').count() == 1)
+    pg.evaluate("window._kh=JSON.stringify(__fl.S.household);__fl.S.household=null;__fl.renderHousehold()")
+    pg.set_input_files('#hhFile', hfile(hh['B'])); pg.wait_for_timeout(200)
+    ok('join by importing a household file', pg.is_visible('#hhJoin'))
+    pg.fill('#hhName', 'TEST Cam'); pg.click('#hhJoin'); pg.wait_for_timeout(300)
+    ok('Join adopts household id and adds the sharer', pg.evaluate(f"__fl.S.household.id==='{hh['hid']}'&&!!__fl.S.household.members['m-testB']"))
+    pg.evaluate("(async()=>{__fl.S.household=null;__fl.S.plan=JSON.parse(window._khh);await __fl.save('household','plan')})()")
+    pg.click('.tabs [data-tab=grocery]'); pg.wait_for_selector('#s-grocery:not([hidden])')
     ctx.set_offline(True); pg.wait_for_timeout(300); ok('offline: cart link explains it needs a connection', 'needs a connection' in pg.inner_text('#walmartBox')); ctx.set_offline(False); pg.wait_for_timeout(300)
     pg.click('#storeBtn'); pg.fill('#storeInput', '3017620422003'); pg.click('#storeForm button'); pg.wait_for_selector('.verdict', timeout=30000)
     ok('store mode checked off matching item', pg.evaluate("__fl.S.grocery.find(g=>g.text==='hazelnut spread').done"))
@@ -553,7 +599,7 @@ try:
     tb = pg.evaluate("__fl.S.toCook.find(t=>t.id===window._a)"); ok('scanning a backup brings meal back with Got backup', not tb['onHold'] and tb['ingredients'][0].get('gotBackup') == pg.evaluate('window._bk'))
     pg.click('.tabs [data-tab=today]')
     # used — need more can be put back on the list via hold
-    pg.evaluate("(()=>{const t=__fl.S.toCook.find(t=>t.ingredients.length&&t.id!==window._a&&!(t.ingredients[0].backups||[]).some(b=>__fl.S.grocery.some(g=>g.done&&g.name===b)));delete t.ingredients[0].gotBackup;t.ingredients[0].used=true;t.ingredients[0].bought=false;t.ingredients[0].have=null;__fl.save('toCook');window._uid=t.id})()")
+    pg.evaluate("(()=>{const t=__fl.S.toCook.find(t=>t.ingredients.length&&t.id!==window._a&&!__fl.satisfied({...t.ingredients[0],used:true,bought:false,have:null,gotBackup:undefined})&&!(t.ingredients[0].backups||[]).some(b=>__fl.S.grocery.some(g=>g.done&&g.name===(b.name||b))));delete t.ingredients[0].gotBackup;t.ingredients[0].used=true;t.ingredients[0].bought=false;t.ingredients[0].have=null;__fl.save('toCook');window._uid=t.id})()")
     pg.evaluate("document.querySelector(`[data-cook='${window._uid}']`)?document.querySelector(`[data-cook='${window._uid}']`).click():0"); pg.wait_for_selector('#cookView[open]')
     ok('used item starts unchecked and is offered via hold', not pg.evaluate("document.querySelector('#cookView [data-have=\"0\"]').checked") and pg.locator('#cookHold').count() == 1)
     pg.click('#cookRemove'); pg.wait_for_timeout(200)

@@ -283,15 +283,18 @@
   <div class="row" id="resListRow" hidden><button class="btn" id="loadResList">📋 Add research list</button><select id="resWeek" style="flex:none;width:120px"></select></div>
   <div class="row"><button class="btn" id="clearChecked">Clear checked</button><button class="btn danger" id="clearAll">🗑️ Remove all</button></div>
 </section>
+<section class="screen" id="s-household" hidden><div id="householdBody"></div></section>
 </main>
 
 <footer class="note">General wellness guidance, not medical advice. Check with your doctor or a registered dietitian for personal needs. Nutrition data: <a href="https://world.openfoodfacts.org" target="_blank" rel="noopener">Open Food Facts</a> (ODbL) or your own entries.</footer>
 
+<dialog id="hhMeal"><div class="pick-head"><span></span><button class="btn" id="hhMealClose" type="button">Close</button></div><div id="hhMealBody"></div></dialog>
 <nav class="tabs">
   <button data-tab="today" class="active"><span>🏠</span>Home</button>
   <button data-tab="progress"><span>📈</span>Progress</button>
   <button data-tab="plan"><span>🗓️</span>Plan</button>
   <button data-tab="grocery"><span>🛒</span>Grocery</button>
+  <button data-tab="household"><span>👪</span>Household</button>
 </nav>
 
 <dialog id="voiceDlg"><div class="pick-head"><h2>🎤 Say your ingredients</h2><button class="btn" id="voiceClose" type="button">Close</button></div>

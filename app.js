@@ -31,7 +31,7 @@ const DB = {
   get(k) { return new Promise(res => { const r = this.db.transaction('kv').objectStore('kv').get(k); r.onsuccess = () => res(r.result); r.onerror = () => res(undefined); }); },
   set(k, v) { return new Promise(res => { const t = this.db.transaction('kv', 'readwrite'); t.objectStore('kv').put(v, k); t.oncomplete = res; t.onerror = res; }); }
 };
-const S = { voiceQueue: [], pantry: [], toCook: [], planAnchor: null, stepChecks: {}, mySteps: [], phaseLog: [], medas: [], focus: [], skips: [], tipDismissed: {}, water: {}, favorites: [], offCache: {}, pendingScans: [], goals: null, weights: [], quizHistory: [], entries: [], grocery: [], myMeals: [], plan: null, queue: [], profile: null, dailyActivity: {}, quiz: null, settings: { waterTarget: null, waterField: null, target: null, targetMin: null, planMode: 'weekly', units: 'us', intervalH: null, notify: false, mealTimes: null } };
+const S = { household: null, voiceQueue: [], pantry: [], toCook: [], planAnchor: null, stepChecks: {}, mySteps: [], phaseLog: [], medas: [], focus: [], skips: [], tipDismissed: {}, water: {}, favorites: [], offCache: {}, pendingScans: [], goals: null, weights: [], quizHistory: [], entries: [], grocery: [], myMeals: [], plan: null, queue: [], profile: null, dailyActivity: {}, quiz: null, settings: { waterTarget: null, waterField: null, target: null, targetMin: null, planMode: 'weekly', units: 'us', intervalH: null, notify: false, mealTimes: null } };
 const KEYS = Object.keys(S);
 async function loadState() { for (const k of KEYS) { const v = await DB.get(k); if (v !== undefined) S[k] = (k === 'settings') ? { ...S.settings, ...v } : v; } }
 const save = (...ks) => Promise.all(ks.map(k => DB.set(k, S[k])));
@@ -419,7 +419,7 @@ document.addEventListener('click', e => {
 });
 
 /* ---------- navigation ---------- */
-const TITLES = { today: 'Food Log', add: 'Add food', progress: 'Progress', guide: 'Mediterranean guide', plan: 'Meal plan & prep', grocery: 'Grocery list', profile: 'Your profile', quiz: 'Questionnaire' };
+const TITLES = { today: 'Food Log', add: 'Add food', progress: 'Progress', guide: 'Mediterranean guide', plan: 'Meal plan & prep', grocery: 'Grocery list', profile: 'Your profile', household: 'Household', quiz: 'Questionnaire' };
 let curTab = 'today';
 function show(tab) {
   curTab = tab;
@@ -429,7 +429,7 @@ function show(tab) {
   $('#title').textContent = TITLES[tab] || '';
   if (tab !== 'add') scanner.stop();
   if (tab !== 'grocery') { storeScanner.stop(); }
-  ({ today: renderToday, progress: renderProgress, guide: renderGuide, plan: renderPlan, grocery: renderGrocery })[tab]?.();
+  ({ today: renderToday, progress: renderProgress, guide: renderGuide, plan: renderPlan, grocery: renderGrocery, household: renderHousehold })[tab]?.();
   window.scrollTo(0, 0);
 }
 $$('.tabs button').forEach(b => b.onclick = () => show(b.dataset.tab));
@@ -1214,6 +1214,85 @@ function seasonSort(ms, jitter = 0) { if (!seasonOn()) return ms; return ms.map(
 function seasonNote() { if (!myState()) return 'Add your ZIP code or state in Profile to see what is in season.'; const T = seasonTable(myState()); if (!T) return 'Seasonal data not available for your state yet'; return T._national ? 'Seasonal data coming for your state (using national seasons for now)' : ''; }
 const seasonWhy = () => { const w = R.seasonal && R.seasonal.why; return w ? (typeof w === 'string' ? w : w.summary || '') : ''; };
 
+/* ---------- household: sync by FILE SHARE only (no server, no accounts) ---------- */
+const HH_COLORS = ['#2563eb', '#db2777', '#ea580c', '#16a34a', '#7c3aed', '#0891b2'];
+const PHASE_TXT = { 1: 'Phase 1 · regular meals first', 2: 'Phase 2 · small swaps', maintenance: 'Maintenance' };
+function hhMyWeek() { return weekPlanDays().flatMap(d => SLOTS.filter(s => d.meals[s] && mealById(d.meals[s])).map(s => ({ date: d.date, slot: s, mealId: d.meals[s], name: mealById(d.meals[s]).name }))); }
+function hhNeeds(week) { const out = {}; for (const w of week) { const m = mealById(w.mealId) || R.meals.find(x => x.id === w.mealId); if (!m) continue;
+  for (const i of m.ingredients || []) { if (isPantry(i)) continue; const k = i.foodId || pNorm(i.name); const o = out[k] || (out[k] = { key: k, name: i.name, foodId: i.foodId || null, amount: 0, unit: i.unit || '', n: 0, walmartItemId: (storeFields(i).walmartItemId) || null }); if (i.amount != null && (i.unit || '') === o.unit) o.amount += +i.amount; o.n++; } }
+  return Object.values(out).map(o => ({ ...o, amount: o.amount ? Math.round(o.amount) : null })); }
+function hhMe() { const H = S.household; const j = (() => { try { return journey(); } catch (e) { return null; } })(); const wk = hhMyWeek();
+  return { id: H.me.id, name: H.me.name, color: H.me.color, allergies: userAllergens(), avoid: [...((S.profile || {}).avoidFoods || [])], phase: j ? j.phase : null, pace: S.settings.pace || null, week: wk, grocery: hhNeeds(wk), updatedAt: Date.now(), me: true }; }
+function hhExport() { const m = hhMe(); delete m.me; return { type: 'foodlog-household', v: 1, householdId: S.household.id, weekOf: weekKey(new Date()), member: m, exportedAt: new Date().toISOString() }; }
+async function hhShareFile(obj, name) {
+  const blob = new Blob([JSON.stringify(obj, null, 1)], { type: 'application/json' }); const file = new File([blob], name, { type: 'application/json' });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) { try { await navigator.share({ files: [file], title: 'Food Log household' }); return 'shared'; } catch (e) { if (e.name === 'AbortError') return 'cancelled'; } }
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); a.remove(); return 'downloaded'; }
+let hhPendingJoin = null;
+async function hhImport(text) {
+  let j; try { j = JSON.parse(text); } catch (e) { return toast('That file is not a Food Log household file'); }
+  if (!j || !/^foodlog-household/.test(j.type || '') || !j.householdId) return toast('That file is not a Food Log household file');
+  const H = S.household;
+  if (!H) { if (j.type !== 'foodlog-household') return toast('Create or join a household first'); hhPendingJoin = j; renderHousehold(); return; }
+  if (j.householdId !== H.id) return toast('That file is from a different household');
+  if (j.type === 'foodlog-household-leave') { if (H.members[j.memberId]) { const nm = H.members[j.memberId].name; delete H.members[j.memberId]; await save('household'); renderHousehold(); toast(`${nm} left the household`); } return; }
+  const m = j.member; if (!m || !m.id) return toast('That household file has no member');
+  if (m.id === H.me.id) return toast('That is your own week');
+  H.members[m.id] = { id: m.id, name: String(m.name || 'Member').slice(0, 30), color: m.color || HH_COLORS[1], allergies: m.allergies || [], avoid: m.avoid || [], phase: m.phase ?? null, pace: m.pace || null, week: Array.isArray(m.week) ? m.week : [], grocery: Array.isArray(m.grocery) ? m.grocery : [], updatedAt: Date.parse(j.exportedAt) || Date.now() };
+  await save('household'); renderHousehold(); toast(`Updated ${H.members[m.id].name}'s week`);
+}
+function hhAll() { const H = S.household; return H ? [hhMe(), ...Object.values(H.members)] : []; }
+function hhMealWarn(meal, mem) { const al = (mem.allergies || []).map(normAllergen); const hits = [...new Set([...(meal.allergens || []).map(normAllergen).filter(a => al.includes(a)), ...(meal.ingredients || []).flatMap(i => { const f = i.foodId && R.foodById[i.foodId]; return f ? [...(f.allergens || []).map(normAllergen).filter(a => al.includes(a)), ...al.filter(a => (ALLERGEN_GROUPS[a] || []).includes(f.group))] : []; })])];
+  const txt = (meal.name + ' ' + (meal.ingredients || []).map(i => i.name).join(' ')).toLowerCase(); const av = (mem.avoid || []).filter(t => t && txt.includes(String(t).toLowerCase())); return { hits, av }; }
+function hhMerged() { const out = {}; for (const mem of hhAll()) for (const g of mem.grocery || []) { const k = g.foodId || pNorm(g.name); const o = out[k] || (out[k] = { key: k, name: g.name, amount: 0, unit: g.unit || '', walmartItemId: g.walmartItemId || null, who: [] });
+  if (g.amount != null && (g.unit || '') === o.unit) o.amount += +g.amount; if (!o.walmartItemId && g.walmartItemId) o.walmartItemId = g.walmartItemId; if (!o.who.some(w => w.id === mem.id)) o.who.push({ id: mem.id, name: mem.name, color: mem.color }); }
+  return Object.values(out).sort((a, b) => a.name.localeCompare(b.name)); }
+const hhChip = w => `<span class="hh-chip" style="--c:${esc(w.color)}">${esc(w.name)}</span>`;
+const hhAmt = o => o.amount ? ` — ${o.amount}${o.unit ? ' ' + esc(o.unit) : ''}` : '';
+function hhCartUrl() { const ids = [...new Set(hhMerged().map(o => o.walmartItemId).filter(Boolean))]; return ids.length ? 'https://affil.walmart.com/cart/addToCart?items=' + ids.map(id => encodeURIComponent(id) + '|1').join(',') : null; }
+function renderHousehold() {
+  const el = $('#householdBody'); if (!el) return; const H = S.household;
+  if (!H) { el.innerHTML = `${hhPendingJoin ? `<div class="card"><b>Join this household?</b><div class="sub">${esc((hhPendingJoin.member || {}).name || 'A member')} shared their week. Pick your name and color, then Join.</div></div>` : '<div class="card"><b>👪 Household</b><div class="sub">Plan meals and shop together. Phones swap a small file when you tap Share. No server, no accounts.</div></div>'}
+      <div class="card hh-setup"><label>Your name<input id="hhName" maxlength="30" placeholder="e.g. Sam"></label><div class="chips" id="hhColors">${HH_COLORS.map((c, i) => `<button type="button" class="hh-color${i === 0 ? ' on' : ''}" data-c="${c}" style="background:${c}" aria-label="Color ${i + 1}"></button>`).join('')}</div>
+      ${hhPendingJoin ? '<button class="btn primary big" id="hhJoin" type="button">Join</button>' : '<button class="btn primary big" id="hhCreate" type="button">Create household</button>'}
+      <label class="btn big file-btn">📥 Import a member's week<input type="file" id="hhFile" accept="application/json,.json" hidden></label></div>`; return; }
+  const all = hhAll(), view = H.view || 'merged';
+  const days = [...new Set(all.flatMap(m => (m.week || []).map(w => w.date)))].sort();
+  const rows = all.map(m => `<div class="hh-row" style="--c:${esc(m.color)}"><div class="hh-who">${hhChip(m)}<span class="sub">${m.me ? 'you' : 'updated ' + esc(new Date(m.updatedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }))}${m.phase ? ' · ' + esc(PHASE_TXT[m.phase] || 'Phase ' + m.phase) : ''}${(m.allergies || []).length ? ' · 🚫 ' + esc(m.allergies.join(', ')) : ''}</span>${m.me ? '' : `<button type="button" class="btn rm-mem" data-rm-mem="${esc(m.id)}">Remove member</button>`}</div>
+      <div class="hh-days">${days.length ? days.map(d => { const ws = (m.week || []).filter(w => w.date === d); return `<div class="hh-day"><div class="k">${esc(fmtDay(fromKey(d)).split(',')[0])}</div>${ws.length ? ws.map(w => { const meal = R.meals.find(x => x.id === w.mealId) || mealById(w.mealId); const wn = meal ? hhMealWarn(meal, m) : { hits: [], av: [] }; return `<button type="button" class="hh-meal${wn.hits.length || wn.av.length ? ' warn' : ''}" data-hh-meal="${esc(w.mealId)}" data-hh-mem="${esc(m.id)}">${wn.hits.length || wn.av.length ? '⚠️ ' : ''}${esc(meal ? meal.name : w.name || w.mealId)}</button>`; }).join('') : '<span class="sub">—</span>'}</div>`; }).join('') : '<span class="sub">No meals planned this week.</span>'}</div></div>`).join('');
+  const merged = hhMerged(), cart = hhCartUrl();
+  const list = view === 'merged' ? `<ul class="grocery hh-list">${merged.map(o => `<li><span class="txt">${esc(o.name)}${hhAmt(o)}</span><span class="hh-chips">${o.who.map(hhChip).join('')}</span></li>`).join('') || '<li class="sub">Nothing needed yet.</li>'}</ul>`
+    : all.map(m => `<h3>${hhChip(m)}</h3><ul class="grocery hh-list">${(m.grocery || []).map(g => `<li><span class="txt">${esc(g.name)}${hhAmt(g)}</span></li>`).join('') || '<li class="sub">Nothing needed.</li>'}</ul>`).join('');
+  el.innerHTML = `<div class="card"><b>👪 This week</b><div class="sub">Tap a meal to see it with that person's allergies and phase.</div><div class="hh-rows">${rows}</div></div>
+    <div class="card"><div class="row between"><b>🛒 Shopping for everyone</b><div class="seg mini" id="hhView"><button type="button" class="seg-btn${view === 'merged' ? ' active' : ''}" data-v="merged">Merged</button><button type="button" class="seg-btn${view === 'person' ? ' active' : ''}" data-v="person">Per person</button></div></div>${list}
+    ${cart ? `<a class="btn big walmart-cart" id="hhCart" href="${esc(cart)}" target="_blank" rel="noopener">🛒 Add to Walmart cart</a><div class="sub">Opens Walmart. Review and check out there yourself.</div>` : ''}</div>
+    <div class="card hh-actions"><button class="btn primary big" id="hhShare" type="button">📤 Share my week</button><label class="btn big file-btn">📥 Import a member's week<input type="file" id="hhFile" accept="application/json,.json" hidden></label><button class="btn big danger" id="hhLeave" type="button">Leave household</button><div class="sub">Data only leaves this phone when you tap Share. History, weight, logs and questionnaire answers are never included.</div></div>`;
+}
+function openHHMeal(mealId, memId) {
+  const mem = hhAll().find(m => m.id === memId); const meal = R.meals.find(x => x.id === mealId) || mealById(mealId); if (!mem || !meal) return;
+  const wn = hhMealWarn(meal, mem);
+  $('#hhMealBody').innerHTML = `<h2>${esc(meal.name)}${costTag(meal)}</h2><div>${hhChip(mem)} <span class="sub">${esc(PHASE_TXT[mem.phase] || (mem.phase ? 'Phase ' + mem.phase : 'Phase not shared'))}</span></div>
+    ${wn.hits.length ? `<div class="warn big-warn">⚠️ Contains ${esc(wn.hits.join(', '))}: conflicts with ${esc(mem.name)}'s allergies</div>` : ''}${wn.av.length ? `<div class="warn big-warn">⚠️ Has ${esc(wn.av.join(', '))}, which ${esc(mem.name)} avoids</div>` : ''}${!wn.hits.length && !wn.av.length ? `<div class="sub">✓ No conflicts with ${esc(mem.name)}'s allergies or foods to avoid</div>` : ''}
+    <h3>Ingredients</h3><ul>${(meal.ingredients || []).map(i => `<li>${esc(i.name)}${i.amount != null ? ' — ' + esc(r1(i.amount)) + (i.unit ? ' ' + esc(i.unit) : '') : ''}</li>`).join('')}</ul>
+    ${(meal.steps || []).length ? `<h3>Steps</h3><ol>${meal.steps.map(x => `<li>${esc(x)}</li>`).join('')}</ol>` : ''}`;
+  $('#hhMeal').showModal(); }
+document.addEventListener('click', async e => {
+  const t = e.target; if (!t.closest('#s-household') && !t.closest('#hhMeal')) return;
+  const col = t.closest('.hh-color'); if (col) { $$('.hh-color').forEach(b => b.classList.toggle('on', b === col)); return; }
+  if (t.closest('#hhCreate') || t.closest('#hhJoin')) { const name = $('#hhName').value.trim(); if (!name) return toast('Add your name first'); const color = ($('.hh-color.on') || {}).dataset?.c || HH_COLORS[0];
+    S.household = { id: hhPendingJoin ? hhPendingJoin.householdId : 'hh-' + uid() + uid(), me: { id: 'm-' + uid() + uid(), name, color }, members: {}, view: 'merged', createdAt: Date.now() };
+    const j = hhPendingJoin; hhPendingJoin = null; await save('household'); if (j) await hhImport(JSON.stringify(j)); renderHousehold(); toast(j ? 'Joined the household. Share your week back.' : 'Household created. Share your week to invite someone.'); return; }
+  const mm = t.closest('[data-hh-meal]'); if (mm) return openHHMeal(mm.dataset.hhMeal, mm.dataset.hhMem);
+  const v = t.closest('#hhView [data-v]'); if (v) { S.household.view = v.dataset.v; await save('household'); renderHousehold(); return; }
+  const rm = t.closest('[data-rm-mem]'); if (rm) { const m = S.household.members[rm.dataset.rmMem]; if (!m || !confirm(`Remove ${m.name} from this phone's household view?`)) return; delete S.household.members[m.id]; await save('household'); renderHousehold(); toast(`Removed ${m.name}`); return; }
+  if (t.closest('#hhShare')) { const r = await hhShareFile(hhExport(), `${S.household.me.name.replace(/[^\w-]+/g, '_')}.foodlog-household.json`); if (r !== 'cancelled') toast(r === 'shared' ? 'Shared' : 'Saved the file. Send it to your household.'); return; }
+  if (t.closest('#hhLeave')) { if (!confirm('Leave the household? Your own history stays on this phone.')) return; const H = S.household; await hhShareFile({ type: 'foodlog-household-leave', v: 1, householdId: H.id, memberId: H.me.id, name: H.me.name, exportedAt: new Date().toISOString() }, `${H.me.name.replace(/[^\w-]+/g, '_')}-leave.foodlog-household.json`); S.household = null; await save('household'); renderHousehold(); toast('You left the household. Send the leave file so others can update.'); return; }
+  if (t.closest('#hhMealClose')) $('#hhMeal').close();
+});
+document.addEventListener('change', async e => { if (e.target.id !== 'hhFile') return; const f = e.target.files[0]; if (!f) return; await hhImport(await f.text()); e.target.value = ''; });
+// share target / file handler launch (installed PWA): files opened with the app
+if ('launchQueue' in window) window.launchQueue.setConsumer(async p => { for (const h of p.files || []) { const f = await h.getFile(); await hhImport(await f.text()); } show('household'); });
+
 /* ---------- meal picker ---------- */
 let pickCtx = null;
 const mealAtStore = m => { if (!myStore()) return false; const ings = (m.ingredients || []).filter(i => !isPantry(i)); return ings.length > 0 && ings.every(i => { const a = storeAvail(storeFields(i)); return a && a.inStock; }); };
@@ -1361,7 +1440,7 @@ $('#installBtn').onclick = async () => { if (deferredPrompt) { deferredPrompt.pr
   if (!S.profile) { fillProfile(); show('profile'); } else show('today');
   resolvePending();
   document.addEventListener('visibilitychange', async () => { if (document.visibilityState === 'visible' && navigator.onLine) { await loadResearch(); if (curTab !== 'add' && curTab !== 'profile' && curTab !== 'quiz') show(curTab); } });
-  window.__fl = { mainFoods, mealById, library, S, R, save, show, weeklyExport, offLookup, parseLabel, lookupAndOpen, storeCheck, ensurePlan, addSwapToGrocery, renderPlan, renderPicker, zipInfo, zipHint, zipToState, myState, seasonShare, seasonTable, seasonSort, makeOptions, mealSuggestHTML, parseIngredientText, startVoice, queueVoice, renderVoiceQueue, pantryUseEntry, pantryAdd, pantryUse, pantryDue, pantryRecipes, renderPantryNudge, renderPantryList, mealBlocked, weekPlanDays, researchWeekPlan, userAllergens, conflict, slotOf, migrateMealIds, mealHour, gInfo, walmartPick, satisfied, checkHolds, addMealThisWeek, approveWeek, weekKey, boughtState, markCooked, walmartCartUrl, renderGrocery, storeKey, availHTML, exportProfile, markScannedForToCook, planDaysAhead, saveToCook, renderToCook, tonightItem, dinnerHour, resolveSwapQueue, swapsFor };
+  window.__fl = { mainFoods, mealById, library, S, R, save, show, weeklyExport, offLookup, parseLabel, lookupAndOpen, storeCheck, ensurePlan, addSwapToGrocery, renderPlan, renderPicker, hhNeeds, hhExport, hhImport, hhMerged, hhAll, renderHousehold, zipInfo, zipHint, zipToState, myState, seasonShare, seasonTable, seasonSort, makeOptions, mealSuggestHTML, parseIngredientText, startVoice, queueVoice, renderVoiceQueue, pantryUseEntry, pantryAdd, pantryUse, pantryDue, pantryRecipes, renderPantryNudge, renderPantryList, mealBlocked, weekPlanDays, researchWeekPlan, userAllergens, conflict, slotOf, migrateMealIds, mealHour, gInfo, walmartPick, satisfied, checkHolds, addMealThisWeek, approveWeek, weekKey, boughtState, markCooked, walmartCartUrl, renderGrocery, storeKey, availHTML, exportProfile, markScannedForToCook, planDaysAhead, saveToCook, renderToCook, tonightItem, dinnerHour, resolveSwapQueue, swapsFor };
 })();
 
 /* ---------- resolve offline-queued barcodes when back online ---------- */
