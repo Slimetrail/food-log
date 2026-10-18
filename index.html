@@ -47,6 +47,8 @@
       <div class="row2"><label>Town / city<input id="pfStoreCity" autocomplete="off"></label><label>State<input id="pfStoreState" maxlength="20" placeholder="e.g. SC" autocomplete="off"></label></div>
       <label class="check big-check"><input type="checkbox" id="pfStoreInStore" checked> In-store only (no delivery or online-only items)</label>
     </fieldset>
+    <fieldset class="goals"><legend>🥡 Leftovers</legend><label>Eat leftovers within<select id="pfLeftoverDays"><option value="1">1 day</option><option value="2" selected>2 days</option><option value="3">3 days</option><option value="4">4 days</option></select></label>
+      <div class="sub">USDA FSIS: refrigerated leftovers keep 3–4 days (<a href="https://www.fsis.usda.gov/food-safety/safe-food-handling-and-preparation/food-safety-basics/leftovers-and-food-safety" target="_blank" rel="noopener">Leftovers and Food Safety</a>).</div></fieldset>
     <fieldset class="goals times"><legend>🕒 Meal times</legend>
       <div class="sub">Defaults from research (typical US meal times). Change them to fit your day.</div>
       <div class="row3"><label>Breakfast<input type="time" id="pfTime_breakfast"></label><label>Lunch<input type="time" id="pfTime_lunch"></label><label>Dinner<input type="time" id="pfTime_dinner"></label></div>
@@ -284,16 +286,20 @@
   <div class="row"><button class="btn" id="clearChecked">Clear checked</button><button class="btn danger" id="clearAll">🗑️ Remove all</button></div>
 </section>
 <section class="screen" id="s-household" hidden><div id="householdBody"></div></section>
+<section class="screen" id="s-leftovers" hidden><div id="leftoversBody"></div></section>
 </main>
 
 <footer class="note">General wellness guidance, not medical advice. Check with your doctor or a registered dietitian for personal needs. Nutrition data: <a href="https://world.openfoodfacts.org" target="_blank" rel="noopener">Open Food Facts</a> (ODbL) or your own entries.</footer>
 
+<dialog id="loPrompt"><form class="dlg"><h2>Servings left over?</h2><div class="stepper"><button type="button" class="step-btn" id="loMinus" aria-label="Fewer">−</button><input id="loQty" inputmode="numeric" value="0" aria-label="Servings left over"><button type="button" class="step-btn" id="loPlus" aria-label="More">+</button></div>
+<div class="slot-btns"><button class="btn primary big" id="loSave" type="button">Save</button><button class="btn big" id="loSkip" type="button">None</button></div></form></dialog>
 <dialog id="hhMeal"><div class="pick-head"><span></span><button class="btn" id="hhMealClose" type="button">Close</button></div><div id="hhMealBody"></div></dialog>
 <nav class="tabs">
   <button data-tab="today" class="active"><span>🏠</span>Home</button>
   <button data-tab="progress"><span>📈</span>Progress</button>
   <button data-tab="plan"><span>🗓️</span>Plan</button>
   <button data-tab="grocery"><span>🛒</span>Grocery</button>
+  <button data-tab="leftovers"><span>🥡</span>Leftovers</button>
   <button data-tab="household"><span>👪</span>Household</button>
 </nav>
 

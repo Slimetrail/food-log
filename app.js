@@ -31,7 +31,7 @@ const DB = {
   get(k) { return new Promise(res => { const r = this.db.transaction('kv').objectStore('kv').get(k); r.onsuccess = () => res(r.result); r.onerror = () => res(undefined); }); },
   set(k, v) { return new Promise(res => { const t = this.db.transaction('kv', 'readwrite'); t.objectStore('kv').put(v, k); t.oncomplete = res; t.onerror = res; }); }
 };
-const S = { household: null, voiceQueue: [], pantry: [], toCook: [], planAnchor: null, stepChecks: {}, mySteps: [], phaseLog: [], medas: [], focus: [], skips: [], tipDismissed: {}, water: {}, favorites: [], offCache: {}, pendingScans: [], goals: null, weights: [], quizHistory: [], entries: [], grocery: [], myMeals: [], plan: null, queue: [], profile: null, dailyActivity: {}, quiz: null, settings: { waterTarget: null, waterField: null, target: null, targetMin: null, planMode: 'weekly', units: 'us', intervalH: null, notify: false, mealTimes: null } };
+const S = { leftovers: [], household: null, voiceQueue: [], pantry: [], toCook: [], planAnchor: null, stepChecks: {}, mySteps: [], phaseLog: [], medas: [], focus: [], skips: [], tipDismissed: {}, water: {}, favorites: [], offCache: {}, pendingScans: [], goals: null, weights: [], quizHistory: [], entries: [], grocery: [], myMeals: [], plan: null, queue: [], profile: null, dailyActivity: {}, quiz: null, settings: { waterTarget: null, waterField: null, target: null, targetMin: null, planMode: 'weekly', units: 'us', intervalH: null, notify: false, mealTimes: null } };
 const KEYS = Object.keys(S);
 async function loadState() { for (const k of KEYS) { const v = await DB.get(k); if (v !== undefined) S[k] = (k === 'settings') ? { ...S.settings, ...v } : v; } }
 const save = (...ks) => Promise.all(ks.map(k => DB.set(k, S[k])));
@@ -375,7 +375,7 @@ async function markCooked(id) {
   const per = {}; if (nut) for (const k of NUTS) per[k] = nut[NUT_EXPORT[k]] ?? null;
   S.entries.push({ id: uid(), ts: Date.now(), name: t.name, brand: '', barcode: '', source: nut ? 'research-meal' : 'manual', basis: 'serving', servingSize: '1 serving (research recipe)', per, qty: 1, categories: [], foodId: null, mealId: t.mealId, group: '', nova: null, social: false, thumb: null, ingredientsText: t.ingredients.map(i => i.name).join(', ') });
   S.toCook = S.toCook.filter(x => x !== t); await save('entries', 'toCook', 'grocery');
-  $('#cookView').close(); toast(nut ? `Logged ${t.name} (${nut.kcal} kcal, research nutrition)` : `Logged ${t.name}. Research has no nutrition for it, so add values if you know them.`, 3500); show('today');
+  $('#cookView').close(); toast(nut ? `Logged ${t.name} (${nut.kcal} kcal, research nutrition)` : `Logged ${t.name}. Research has no nutrition for it, so add values if you know them.`, 3500); show('today'); askLeftovers(t, meal);
 }
 document.addEventListener('click', async e => {
   const hv = e.target.closest('[data-have]'); if (hv) { const t = S.toCook.find(x => x.id === hv.dataset.id); if (t) { const ii = t.ingredients[+hv.dataset.have]; ii.have = hv.checked; if (hv.checked) { delete ii.haveOverride; delete ii.overrideAt; } else { ii.haveOverride = false; ii.overrideAt = Date.now(); } await save('toCook'); $('#cookMissing').innerHTML = missingHTML(t); } return; }
@@ -419,7 +419,7 @@ document.addEventListener('click', e => {
 });
 
 /* ---------- navigation ---------- */
-const TITLES = { today: 'Food Log', add: 'Add food', progress: 'Progress', guide: 'Mediterranean guide', plan: 'Meal plan & prep', grocery: 'Grocery list', profile: 'Your profile', household: 'Household', quiz: 'Questionnaire' };
+const TITLES = { today: 'Food Log', add: 'Add food', progress: 'Progress', guide: 'Mediterranean guide', plan: 'Meal plan & prep', grocery: 'Grocery list', profile: 'Your profile', household: 'Household', leftovers: 'Leftovers', quiz: 'Questionnaire' };
 let curTab = 'today';
 function show(tab) {
   curTab = tab;
@@ -429,7 +429,7 @@ function show(tab) {
   $('#title').textContent = TITLES[tab] || '';
   if (tab !== 'add') scanner.stop();
   if (tab !== 'grocery') { storeScanner.stop(); }
-  ({ today: renderToday, progress: renderProgress, guide: renderGuide, plan: renderPlan, grocery: renderGrocery, household: renderHousehold })[tab]?.();
+  ({ today: renderToday, progress: renderProgress, guide: renderGuide, plan: renderPlan, grocery: renderGrocery, household: renderHousehold, leftovers: renderLeftovers })[tab]?.();
   window.scrollTo(0, 0);
 }
 $$('.tabs button').forEach(b => b.onclick = () => show(b.dataset.tab));
@@ -440,7 +440,7 @@ function ageFrom(p) { if (p.birthDate) { const b = new Date(p.birthDate), n = ne
 function setUnits(u) { S.settings.units = u; $$('#pfUnits .seg-btn').forEach(b => b.classList.toggle('active', b.dataset.u === u)); $$('.us-only').forEach(e => e.hidden = u !== 'us'); $$('.metric-only').forEach(e => e.hidden = u === 'us'); }
 $$('#pfUnits .seg-btn').forEach(b => b.onclick = () => setUnits(b.dataset.u));
 $('#pfAllergens').onclick = e => { const b = e.target.closest('button'); if (b) b.classList.toggle('on'); };
-function fillProfile() {
+function fillProfile() { if ($('#pfLeftoverDays')) $('#pfLeftoverDays').value = String(loDays());
   const p = S.profile || {};
   $('#pfSex').value = p.sex || ''; $('#pfBirth').value = p.birthDate || ''; $('#pfAge').value = p.birthDate ? '' : (p.ageYears ?? '');
   setUnits(S.settings.units || 'us');
@@ -1099,6 +1099,8 @@ function renderPlan() {
   $('#planChoice').hidden = S.settings.planStyle !== 'pending';
   $('#planDays').innerHTML = days.map(d => `<details class="day${d.date === tk ? ' today' : ''}"${d.date === tk ? ' open' : ''} data-date="${d.date}"><summary><h3>${d.date === tk ? 'Today · ' : ''}${fmtDay(fromKey(d.date))}</h3><div class="sub">${SLOTS.filter(s => d.meals[s] && mealById(d.meals[s])).map(s => esc(mealById(d.meals[s]).name)).join(' · ') || 'Nothing chosen yet. Tap to choose.'}</div></summary>
     ${SLOTS.map(s => { const m = d.meals[s] && mealById(d.meals[s]); const w = m ? sameDayWarn(m, d, s) : '';
+      const lo = d.leftovers && d.leftovers[s] && S.leftovers.find(x => x.id === d.leftovers[s] && x.status === 'active');
+      if (lo) return `<div class="plan-slot"><div class="k">${s}</div><div class="chosen"><b>🥡 Leftover: ${esc(lo.name)}</b><div class="sub">No cooking, nothing to buy · ${lo.servings} left</div></div><div class="slot-btns"><button type="button" class="btn big primary" data-lo-ate="${lo.id}">✅ Ate it</button><button type="button" class="btn big rm" data-lo-unplan="${s}">✕ Remove</button></div></div>`;
       return `<div class="plan-slot"><div class="k">${s}</div>${m ? `<div class="chosen"><b>${esc(m.name)}</b>${costTag(m)}${w ? `<div class="warn">⚠️ ${esc(w)}</div>` : ''}</div><div class="slot-btns"><button type="button" class="btn big" data-pick="${s}">Change</button><button type="button" class="btn big rm" data-rm="${s}">✕ Remove</button></div>` : `<button type="button" class="btn big choose" data-pick="${s}">➕ Choose a meal</button>`}</div>`; }).join('')}</details>`).join('');
   renderPrep(); const ab = $('#approveWeekPlan'); if (ab) ab.textContent = weekApproved() ? '✅ This week\'s meals are in To cook (tap to refresh)' : '✅ Use these meals this week';
 }
@@ -1111,6 +1113,7 @@ async function removePlanned(date, slot) {
 $('#planDays').onclick = async e => {
   const det = e.target.closest('[data-date]'); if (!det) return; const date = det.dataset.date;
   const rm = e.target.closest('[data-rm]'); if (rm) { const snap = snapshot(); const nm = (mealById(S.plan.days.find(x => x.date === date).meals[rm.dataset.rm]) || {}).name || 'Meal'; await removePlanned(date, rm.dataset.rm); await save('plan', 'toCook', 'grocery'); renderPlan(); const again = $(`#planDays [data-date="${date}"]`); if (again) again.open = true; toastUndo(`Removed ${nm}`, snap); return; }
+  const lu = e.target.closest('[data-lo-unplan]'); if (lu) { const d = S.plan.days.find(x => x.date === date); delete d.leftovers[lu.dataset.loUnplan]; await save('plan'); renderPlan(); return; }
   const pk = e.target.closest('[data-pick]'); if (pk) openPicker(date, pk.dataset.pick);
 };
 $('#clearWeek').onclick = async () => { const days = weekPlanDays(); const n = days.reduce((a, d) => a + Object.keys(d.meals).length, 0); if (!n) return toast('Nothing planned this week'); if (!confirm(`Remove all ${n} planned meals this week?`)) return; const snap = snapshot(); for (const d of days) for (const s of Object.keys(d.meals)) await removePlanned(d.date, s); await save('plan', 'toCook', 'grocery'); renderPlan(); toastUndo(`Cleared ${n} meals this week`, snap); };
@@ -1293,6 +1296,62 @@ document.addEventListener('change', async e => { if (e.target.id !== 'hhFile') r
 // share target / file handler launch (installed PWA): files opened with the app
 if ('launchQueue' in window) window.launchQueue.setConsumer(async p => { for (const h of p.files || []) { const f = await h.getFile(); await hhImport(await f.text()); } show('household'); });
 
+/* ---------- leftovers (eat-by window: default 2 days, 1-4 allowed; USDA FSIS: refrigerated leftovers 3-4 days) ---------- */
+const FSIS_URL = 'https://www.fsis.usda.gov/food-safety/safe-food-handling-and-preparation/food-safety-basics/leftovers-and-food-safety';
+const loDays = () => Math.min(4, Math.max(1, +S.settings.leftoverDays || 2));
+let loPending = null;
+function askLeftovers(t, meal) { loPending = { mealId: t.mealId || null, name: t.name, ingredients: (t.ingredients || []).map(i => ({ foodId: i.foodId || null, name: i.name })) }; $('#loQty').value = 0; $('#loPrompt').showModal(); }
+async function saveLeftovers(n) { if (!loPending || !(n > 0)) { loPending = null; return; } const now = Date.now(); S.leftovers.push({ id: uid(), ...loPending, servings: n, madeAt: now, eatBy: now + loDays() * DAY_MS, status: 'active' }); loPending = null; await save('leftovers'); toast(`🥡 Saved ${n} leftover serving${n === 1 ? '' : 's'}`); }
+function archiveLeftovers(now = Date.now()) { let n = 0; for (const l of S.leftovers) if (l.status === 'active' && (l.eatBy <= now || l.servings <= 0)) { l.status = l.servings <= 0 ? 'eaten' : 'archived'; n++; } if (n) save('leftovers'); }
+function loState(l, now = Date.now()) { const win = l.eatBy - l.madeAt, left = (l.eatBy - now) / win; if (left < 0.25 || dayKey(new Date(l.eatBy)) === dayKey(new Date(now))) return { cls: 'red', label: 'Eat today' }; if (left < 0.5) return { cls: 'yellow', label: 'Eat soon' }; return { cls: 'green', label: 'Fresh' }; }
+function loMatches(l, exact) {
+  const have = new Set(), haveN = []; for (const i of l.ingredients || []) { if (i.foodId) have.add(i.foodId); haveN.push(pNorm(i.name)); }
+  for (const p of S.pantry || []) { if (p.foodId) have.add(p.foodId); haveN.push(pNorm(p.name)); }
+  const covered = i => isPantry(i) || (i.foodId && have.has(i.foodId)) || haveN.some(n => n && (n === pNorm(i.name)));
+  const fromLeft = i => (l.ingredients || []).some(j => (j.foodId && j.foodId === i.foodId) || pNorm(j.name) === pNorm(i.name));
+  return library().filter(m => m.origin === 'research' && m.id !== l.mealId).map(m => { const ing = m.ingredients || [], miss = ing.filter(i => !covered(i)); return { m, cov: ing.length ? (ing.length - miss.length) / ing.length : 0, miss, uses: ing.filter(fromLeft).length }; })
+    .filter(x => x.uses > 0 && (!exact || !x.miss.length)).sort((a, b) => b.cov - a.cov || b.uses - a.uses || tierOf(a.m) - tierOf(b.m)).slice(0, 5);
+}
+let loOpen = null, loExact = false;
+function renderLeftovers() {
+  archiveLeftovers(); const el = $('#leftoversBody'); if (!el) return; const now = Date.now();
+  const act = S.leftovers.filter(l => l.status === 'active').sort((a, b) => a.eatBy - b.eatBy), arch = S.leftovers.filter(l => l.status !== 'active').sort((a, b) => b.madeAt - a.madeAt);
+  const card = l => { const st = loState(l, now); const hrs = Math.max(0, Math.round((l.eatBy - now) / 36e5)); return `<div class="card lo lo-${st.cls}" data-lo="${l.id}"><div class="row between"><b>${esc(l.name)}</b><span class="lo-badge">${st.label}</span></div>
+    <div class="sub">${l.servings} serving${l.servings === 1 ? '' : 's'} · made ${esc(fmtDay(new Date(l.madeAt)).split(',').slice(0, 2).join(','))} · eat by ${esc(new Date(l.eatBy).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }))} (${hrs < 24 ? hrs + ' h' : Math.round(hrs / 24) + ' days'} left)</div>
+    <div class="slot-btns"><button type="button" class="btn big" data-lo-act="plan">🍽️ Add to today's plan as-is</button><button type="button" class="btn big" data-lo-act="new">✨ Make something new from these</button></div>
+    ${loOpen === l.id ? loMatchHTML(l) : ''}</div>`; };
+  el.innerHTML = `<div class="sub lo-note">Eat-by uses your window of ${loDays()} day${loDays() === 1 ? '' : 's'} (change in Profile). USDA FSIS says refrigerated leftovers keep 3–4 days: <a href="${FSIS_URL}" target="_blank" rel="noopener">Leftovers and Food Safety</a>.</div>
+    ${act.length ? act.map(card).join('') : '<div class="card empty">No leftovers right now. When you tap "Yes, I made it" you can save servings here.</div>'}
+    ${arch.length ? `<details class="card" id="loArchived"><summary><b>Archived (${arch.length})</b></summary><ul class="grocery">${arch.map(l => `<li data-lo="${l.id}"><span class="txt">${esc(l.name)} <span class="sub">· ${l.status === 'eaten' ? 'eaten' : 'past eat-by'} · ${esc(fmtDay(new Date(l.madeAt)).split(',')[0])}</span></span><button type="button" class="btn rm-p" data-lo-act="del" aria-label="Delete">✕</button></li>`).join('')}</ul></details>` : ''}`;
+}
+function loMatchHTML(l) {
+  const ms = loMatches(l, loExact), good = ms.filter(x => x.cov >= 0.5);
+  let q = '';
+  if (!good.length) { const key = 'lo:' + (l.ingredients || []).map(i => i.foodId || pNorm(i.name)).sort().join(','); if (!S.queue.some(x => x.needsRecipe && x.pantryKey === key)) { S.queue.push({ name: 'Leftovers: ' + (l.ingredients || []).map(i => i.name).join(', '), ingredients: (l.ingredients || []).map(i => ({ foodId: i.foodId, name: i.name })), pantryKey: key, needsRecipe: true, source: 'leftovers', status: 'pending', scannedAt: new Date().toISOString() }); save('queue'); } q = '<div class="sub lo-research">🔎 Research is finding a recipe for these.</div>'; }
+  return `<div class="lo-match"><label class="check big-check"><input type="checkbox" id="loExact"${loExact ? ' checked' : ''}> Exact ingredients only</label>
+    ${ms.length ? ms.map(x => `<button type="button" class="pick-row" data-lo-meal="${esc(x.m.id)}"><span class="nm">${esc(x.m.name)}${costTag(x.m)}</span><span class="sub">You have ${Math.round(x.cov * 100)}% of it${x.miss.length ? ' · missing: ' + esc(x.miss.map(i => i.name).join(', ')) : ' · nothing missing'}</span></button>`).join('') : '<div class="sub">No research meal uses these leftovers' + (loExact ? ' with only what you have.' : '.') + '</div>'}${q}</div>`;
+}
+async function eatLeftover(id) { const l = S.leftovers.find(x => x.id === id); if (!l) return; l.servings = Math.max(0, l.servings - 1);
+  const meal = l.mealId && R.meals.find(m => m.id === l.mealId), nut = meal && meal.nutritionApprox; const per = {}; if (nut) for (const k of NUTS) per[k] = nut[NUT_EXPORT[k]] ?? null;
+  S.entries.push({ id: uid(), ts: Date.now(), name: l.name + ' (leftover)', brand: '', barcode: '', source: nut ? 'research-meal' : 'manual', basis: 'serving', servingSize: '1 serving (leftover)', per, qty: 1, categories: [], foodId: null, mealId: l.mealId, group: '', nova: null, social: false, thumb: null });
+  for (const d of (S.plan ? S.plan.days : [])) for (const [s, v] of Object.entries(d.leftovers || {})) if (v === id) delete d.leftovers[s];
+  if (l.servings <= 0) l.status = 'eaten'; await save('leftovers', 'entries', 'plan'); toast(`Logged ${l.name} (leftover)${l.servings ? ` · ${l.servings} left` : ''}`); }
+document.addEventListener('click', async e => {
+  const t = e.target; if (t.id === 'loSave') { e.preventDefault(); $('#loPrompt').close(); await saveLeftovers(Math.round(+$('#loQty').value || 0)); return; }
+  if (t.id === 'loSkip') { e.preventDefault(); loPending = null; $('#loPrompt').close(); return; }
+  if (t.id === 'loMinus' || t.id === 'loPlus') { e.preventDefault(); const q = $('#loQty'); q.value = Math.max(0, Math.min(12, (+q.value || 0) + (t.id === 'loPlus' ? 1 : -1))); return; }
+  const lo = t.closest('[data-lo]'); if (!lo) { const ate = t.closest('[data-lo-ate]'); if (ate) { await eatLeftover(ate.dataset.loAte); renderPlan(); } return; }
+  const l = S.leftovers.find(x => x.id === lo.dataset.lo); if (!l) return; const a = t.closest('[data-lo-act]');
+  if (a && a.dataset.loAct === 'del') { S.leftovers = S.leftovers.filter(x => x !== l); await save('leftovers'); renderLeftovers(); return; }
+  if (a && a.dataset.loAct === 'new') { loOpen = loOpen === l.id ? null : l.id; renderLeftovers(); return; }
+  if (a && a.dataset.loAct === 'plan') { ensurePlan(); const tk = dayKey(new Date()), d = S.plan && S.plan.days.find(x => x.date === tk); if (!d) return toast('No plan for today yet');
+    d.leftovers = d.leftovers || {}; const slot = a.dataset.slot || SLOTS.find(s => !d.meals[s] && !d.leftovers[s]);
+    if (!slot) { const box = lo.querySelector('.lo-slots') || lo.appendChild(Object.assign(document.createElement('div'), { className: 'lo-slots' })); box.innerHTML = `<div class="sub">Today is full. Put it in place of:</div><div class="slot-btns">${SLOTS.map(s => `<button type="button" class="btn big" data-lo-act="plan" data-slot="${s}">${s}</button>`).join('')}</div>`; return; }
+    if (d.meals[slot]) await removePlanned(d.date, slot); d.leftovers[slot] = l.id; await save('plan', 'toCook', 'grocery'); lo.querySelector('.lo-slots')?.remove(); toast(`🥡 ${l.name} added to today's ${slot}`); return; }
+  const mm = t.closest('[data-lo-meal]'); if (mm) { const m = mealById(mm.dataset.loMeal); if (!m) return; let tc = S.toCook.find(x => x.mealId === m.id && x.source === 'leftovers'); if (!tc) { await saveToCook({ mealId: m.id, name: m.name }, 'leftovers'); tc = S.toCook[S.toCook.length - 1]; } openCook(tc.id); }
+});
+document.addEventListener('change', async e => { if (e.target.id === 'loExact') { loExact = e.target.checked; renderLeftovers(); } if (e.target.id === 'pfLeftoverDays') { S.settings.leftoverDays = +e.target.value; await save('settings'); } });
+
 /* ---------- meal picker ---------- */
 let pickCtx = null;
 const mealAtStore = m => { if (!myStore()) return false; const ings = (m.ingredients || []).filter(i => !isPantry(i)); return ings.length > 0 && ings.every(i => { const a = storeAvail(storeFields(i)); return a && a.inStock; }); };
@@ -1436,11 +1495,11 @@ $('#installBtn').onclick = async () => { if (deferredPrompt) { deferredPrompt.pr
 
 /* ---------- init ---------- */
 (async () => {
-  await DB.open(); await loadState(); if (S.settings.planStyle == null) { S.settings.planStyle = S.plan && (S.plan.days || []).some(d => Object.keys(d.meals || {}).length) ? 'pending' : 'choose'; save('settings'); } await loadResearch();
+  await DB.open(); await loadState(); try { archiveLeftovers(); } catch (e) {} if (S.settings.planStyle == null) { S.settings.planStyle = S.plan && (S.plan.days || []).some(d => Object.keys(d.meals || {}).length) ? 'pending' : 'choose'; save('settings'); } await loadResearch();
   if (!S.profile) { fillProfile(); show('profile'); } else show('today');
   resolvePending();
   document.addEventListener('visibilitychange', async () => { if (document.visibilityState === 'visible' && navigator.onLine) { await loadResearch(); if (curTab !== 'add' && curTab !== 'profile' && curTab !== 'quiz') show(curTab); } });
-  window.__fl = { mainFoods, mealById, library, S, R, save, show, weeklyExport, offLookup, parseLabel, lookupAndOpen, storeCheck, ensurePlan, addSwapToGrocery, renderPlan, renderPicker, hhNeeds, hhExport, hhImport, hhMerged, hhAll, renderHousehold, zipInfo, zipHint, zipToState, myState, seasonShare, seasonTable, seasonSort, makeOptions, mealSuggestHTML, parseIngredientText, startVoice, queueVoice, renderVoiceQueue, pantryUseEntry, pantryAdd, pantryUse, pantryDue, pantryRecipes, renderPantryNudge, renderPantryList, mealBlocked, weekPlanDays, researchWeekPlan, userAllergens, conflict, slotOf, migrateMealIds, mealHour, gInfo, walmartPick, satisfied, checkHolds, addMealThisWeek, approveWeek, weekKey, boughtState, markCooked, walmartCartUrl, renderGrocery, storeKey, availHTML, exportProfile, markScannedForToCook, planDaysAhead, saveToCook, renderToCook, tonightItem, dinnerHour, resolveSwapQueue, swapsFor };
+  window.__fl = { mainFoods, mealById, library, S, R, save, show, weeklyExport, offLookup, parseLabel, lookupAndOpen, storeCheck, ensurePlan, addSwapToGrocery, renderPlan, renderPicker, askLeftovers, saveLeftovers, archiveLeftovers, renderLeftovers, loMatches, eatLeftover, hhNeeds, hhExport, hhImport, hhMerged, hhAll, renderHousehold, zipInfo, zipHint, zipToState, myState, seasonShare, seasonTable, seasonSort, makeOptions, mealSuggestHTML, parseIngredientText, startVoice, queueVoice, renderVoiceQueue, pantryUseEntry, pantryAdd, pantryUse, pantryDue, pantryRecipes, renderPantryNudge, renderPantryList, mealBlocked, weekPlanDays, researchWeekPlan, userAllergens, conflict, slotOf, migrateMealIds, mealHour, gInfo, walmartPick, satisfied, checkHolds, addMealThisWeek, approveWeek, weekKey, boughtState, markCooked, walmartCartUrl, renderGrocery, storeKey, availHTML, exportProfile, markScannedForToCook, planDaysAhead, saveToCook, renderToCook, tonightItem, dinnerHour, resolveSwapQueue, swapsFor };
 })();
 
 /* ---------- resolve offline-queued barcodes when back online ---------- */

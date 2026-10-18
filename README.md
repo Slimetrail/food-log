@@ -21,3 +21,10 @@ General wellness guidance, not medical advice.
 - `data/seasonal.json` comes from research (synced by `scripts/sync-data.js`, precached via `data/index.json`). If the file is missing or has no entry for the user's state, seasonal ranking switches off and the app says "Seasonal data not available for your state yet".
 - Location is optional: a ZIP code (mapped to a state on the phone, no network) or a state picker; it falls back to the My store state. No GPS.
 - ZIP→state uses the standard 3-digit ZIP prefix ranges published by USPS (Publication 65, *National Five-Digit ZIP Code and Post Office Directory*; the same table is summarized at https://en.wikipedia.org/wiki/List_of_ZIP_Code_prefixes). Military (AA/AE/AP) and unassigned prefixes return no state.
+
+## Leftovers
+- Eat-by window defaults to 2 days (user choice, 1–4 in Profile). USDA FSIS, "Leftovers and Food Safety" (last updated Jul 31, 2020; checked 2026-10-18): "Leftovers can be kept in the refrigerator for 3 to 4 days or frozen for 3 to 4 months." https://www.fsis.usda.gov/food-safety/safe-food-handling-and-preparation/food-safety-basics/leftovers-and-food-safety
+- "Make something new" only ranks research meals (meals.json) by ingredient coverage; it never writes recipes or nutrition. Weak matches go to the research queue with `needsRecipe: true`.
+
+## Household
+- Phones sync by sharing a `.foodlog-household.json` file (Web Share API or download). No server or accounts. The file holds member id/name/color, allergies, foods to avoid, phase, this week's planned meals and their grocery needs only.
